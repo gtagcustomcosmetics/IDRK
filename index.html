@@ -18,6 +18,7 @@ canvas{display:block}
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
+import {VRButton} from 'three/addons/webxr/VRButton.js';
 
 const $=id=>document.getElementById(id), V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
 const R=0.55, RH=0.1, GRAV=9.8, MAXV=12, SENS=0.005, LOOK=0.0025, PI=Math.PI;
@@ -28,6 +29,8 @@ const scene=new THREE.Scene();scene.background=new THREE.Color(0x9fd3f5);scene.f
 scene.add(new THREE.HemisphereLight(0xffffff,0x6a8a4a,1.2));
 const sun=new THREE.DirectionalLight(0xffffff,2.2);sun.position.set(50,100,30);scene.add(sun);
 const cam=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.05,500);
+const rig=new THREE.Group();scene.add(rig);rig.add(cam);
+renderer.xr.enabled=true;document.body.appendChild(VRButton.createButton(renderer));
 addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
 
 // ---------- load assets ----------
@@ -82,6 +85,15 @@ function aim(g,k,a,b){
   up.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
 }
 
+const _eu=new THREE.Euler();
+function aimAt(g,k,tp){
+  const up=g.rig.upper[k];up.scale.set(1,1,1);g.group.updateMatrixWorld(true);
+  up.getWorldPosition(_S);g.rig.wrist[k].getWorldPosition(_W);_C.subVectors(_W,_S).normalize();
+  _D.subVectors(tp,_S);const d=_D.length();_D.normalize();
+  _q.setFromUnitVectors(_C,_D);up.getWorldQuaternion(_Qw);up.parent.getWorldQuaternion(_Pq);
+  up.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
+  up.scale.y=Math.min(1.7,Math.max(0.6,d/g.rig.len[k]));
+}
 // ---------- player ----------
 const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],it:false,imm:0,safe:0,third:false,was:false};
 function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
@@ -105,7 +117,7 @@ addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domEleme
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -182,13 +194,69 @@ function stepBots(dt,t){
       if(it.imm<=0&&ot.imm<=0){it.it=false;ot.it=true;it.imm=ot.imm=2.5}}
   }
 }
+// ---------- VR (WebXR): headset = body, controllers = hands ----------
+const VS=1.4; // VR world scale: makes your real arms reach the ground like a gorilla's
+const grips=[0,1].map(i=>{const g=renderer.xr.getControllerGrip(i);rig.add(g);return g});
+const byHand=[null,null],vrPrev=[null,null];let vrInit=false,vrBtn=false,hudT=0;
+const hc=document.createElement('canvas');hc.width=256;hc.height=128;const hx=hc.getContext('2d'),htex=new THREE.CanvasTexture(hc);
+const hudMesh=new THREE.Mesh(new THREE.PlaneGeometry(0.2,0.1),new THREE.MeshBasicMaterial({map:htex,transparent:true,depthTest:false}));
+hudMesh.rotation.x=-PI/2;hudMesh.position.y=0.06;hudMesh.renderOrder=10;
+[0,1].forEach(i=>{const c=renderer.xr.getController(i);rig.add(c);
+  c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null;if(hd===0)grips[i].add(hudMesh)});
+  c.addEventListener('disconnected',()=>{for(let k=0;k<2;k++)if(byHand[k]&&byHand[k].grip===grips[i]){byHand[k]=null;vrPrev[k]=null}})});
+renderer.xr.addEventListener('sessionstart',()=>{rig.scale.setScalar(VS);rig.position.set(P.pos.x,hgt(P.pos.x,P.pos.z)+0.5,P.pos.z);
+  P.vel.set(0,0,0);P.hist=[];P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(0.001)});vrInit=true;$('help').style.display='none'});
+renderer.xr.addEventListener('sessionend',()=>{rig.scale.setScalar(1);rig.position.set(0,0,0);rig.rotation.set(0,0,0);
+  P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(1)});[0,1].forEach(k=>P.g.rig.upper[k].scale.set(1,1,1));reset();if(!locked)$('help').style.display='flex'});
+const _hd=V();
+function stepVR(dt){
+  rig.updateMatrixWorld(true);const xc=renderer.xr.getCamera();
+  const head=()=>rig.localToWorld(_hd.copy(xc.position));
+  head();const pb=_hd.clone();pb.y-=0.5;
+  if(vrInit){rig.position.y+=hgt(pb.x,pb.z)+R-pb.y;vrInit=false;rig.updateMatrixWorld(true);head();pb.copy(_hd);pb.y-=0.5}
+  const hp=_hd.clone(),disp=V(),w=[null,null];let touching=false;
+  for(let k=0;k<2;k++){
+    P.touch[k]=false;const bh=byHand[k];if(!bh){vrPrev[k]=null;continue}
+    w[k]=rig.localToWorld(bh.grip.position.clone());const ow=w[k].clone().sub(hp);
+    if(!vrPrev[k])vrPrev[k]=ow.clone();
+    const h=hgt(w[k].x,w[k].z);
+    if(w[k].y-RH<h+0.03){disp.sub(ow.clone().sub(vrPrev[k]));touching=true;P.touch[k]=true}
+    vrPrev[k].copy(ow);
+  }
+  const mv=V();
+  if(touching){
+    mv.copy(disp);
+    for(let k=0;k<2;k++)if(P.touch[k]){const wy=w[k].y+mv.y,h=hgt(w[k].x+mv.x,w[k].z+mv.z);if(wy-RH<h)mv.y+=h+RH-wy}
+    P.hist.push(mv.clone().divideScalar(dt));if(P.hist.length>5)P.hist.shift();
+    P.vel.set(0,0,0);P.hist.forEach(v=>P.vel.add(v));P.vel.divideScalar(P.hist.length);
+    if(P.vel.length()>MAXV)P.vel.setLength(MAXV);
+  }else{
+    if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>MAXV)P.vel.setLength(MAXV)}
+    P.hist=[];P.vel.y-=GRAV*dt;mv.copy(P.vel).multiplyScalar(dt);
+  }
+  P.was=touching;
+  const pn=pb.clone().add(mv),h=hgt(pn.x,pn.z);
+  if(pn.y-R<h){mv.y+=h+R-pn.y;if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
+  pn.copy(pb).add(mv);
+  if(Math.abs(pn.x)>68){mv.x+=Math.sign(pn.x)*68-pn.x;P.vel.x=0}
+  if(Math.abs(pn.z)>68){mv.z+=Math.sign(pn.z)*68-pn.z;P.vel.z=0}
+  rig.position.add(mv);P.pos.copy(pb).add(mv);
+  const gg=P.g.group;gg.position.copy(P.pos);gg.rotation.y=_eu.setFromQuaternion(xc.quaternion,'YXZ').y+PI;gg.updateMatrixWorld(true);
+  for(let k=0;k<2;k++)if(w[k])aimAt(P.g,k,w[k].add(mv));
+  // any face button (A/B/X/Y) = respawn
+  let pr=false;for(let k=0;k<2;k++){const gp=byHand[k]&&byHand[k].gp;if(gp&&((gp.buttons[4]&&gp.buttons[4].pressed)||(gp.buttons[5]&&gp.buttons[5].pressed)))pr=true}
+  if(pr&&!vrBtn){rig.position.set(0,hgt(0,0)+0.5,0);P.vel.set(0,0,0);vrInit=true}vrBtn=pr;
+  hudT-=dt;if(hudT<=0){hudT=0.3;hx.clearRect(0,0,256,128);hx.fillStyle='#000a';hx.fillRect(0,0,256,128);hx.fillStyle=P.it?'#ff6b6b':'#fff';
+    hx.font='bold 30px sans-serif';hx.fillText(P.it?"YOU'RE IT!":'Run!',12,48);hx.font='24px sans-serif';hx.fillStyle='#fff';hx.fillText(P.safe.toFixed(1)+'s safe',12,92);htex.needsUpdate=true}
+}
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
-  if(locked||true){stepPlayer(dt);stepBots(dt,t)}
+  if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);stepBots(dt,t);
   if(!P.it)P.safe+=dt;
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
-  if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
+  if(renderer.xr.isPresenting){}
+  else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
   else{cam.position.copy(P.g.group.localToWorld(V(0,0.5,0.28)));cam.rotation.set(P.pitch,P.yaw,0,'YXZ')}
   $('state').textContent=P.it?"YOU'RE IT! Tag a gorilla!":'Run! Stay untagged';
   $('state').style.color=P.it?'#ff6b6b':'#fff';
