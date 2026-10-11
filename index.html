@@ -62,7 +62,7 @@ function makeGorilla(){
   const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
   const rig={upper:[],wrist:[],sh:[],len:[]};
   model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh)o.frustumCulled=false;
-    const n=o.name.replace(/\s/g,'');
+    const n=o.name.replace(/[\s_]/g,'');
     if(n.startsWith('UpperArmL'))rig.upper[0]=o;if(n.startsWith('UpperArmR'))rig.upper[1]=o;
     if(n.startsWith('WristL'))rig.wrist[0]=o;if(n.startsWith('WristR'))rig.wrist[1]=o;});
   group.updateMatrixWorld(true);
