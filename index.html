@@ -63,13 +63,14 @@ function hgt(x,z){
 const markGeo=new THREE.SphereGeometry(0.13),markMat=new THREE.MeshBasicMaterial({color:0xff2222});
 function makeGorilla(){
   const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
-  const rig={upper:[],wrist:[],sh:[],len:[]};
+  const rig={upper:[],lower:[],wrist:[],sh:[],len:[],lu:[],ll:[]};
   model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh)o.frustumCulled=false;
     const n=o.name.replace(/[\s_]/g,'');
     if(n.startsWith('UpperArmL'))rig.upper[0]=o;if(n.startsWith('UpperArmR'))rig.upper[1]=o;
+    if(n.startsWith('LowerArmL'))rig.lower[0]=o;if(n.startsWith('LowerArmR'))rig.lower[1]=o;
     if(n.startsWith('WristL'))rig.wrist[0]=o;if(n.startsWith('WristR'))rig.wrist[1]=o;});
   group.updateMatrixWorld(true);
-  for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w)}
+  for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w);const l=rig.lower[k].getWorldPosition(V());rig.lu[k]=s.distanceTo(l);rig.ll[k]=l.distanceTo(w)}
   const mark=new THREE.Mesh(markGeo,markMat);mark.position.set(0,0.95,0);mark.visible=false;group.add(mark);
   return {group,rig,mark};
 }
@@ -94,6 +95,32 @@ function aimAt(g,k,tp){
   up.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
   up.scale.y=Math.min(1.7,Math.max(0.6,d/g.rig.len[k]));
 }
+// 2-bone IK: shoulder -> elbow -> wrist reaches T, elbow bends toward `pole`; arm stretches a bit if T is too far
+const _u=V(),_ep=V(),_roll=new THREE.Quaternion(),_wq=new THREE.Quaternion();
+function aimBone(b,c,tp){
+  b.updateWorldMatrix(true,true);b.getWorldPosition(_S);c.getWorldPosition(_W);
+  _C.subVectors(_W,_S).normalize();_D.subVectors(tp,_S).normalize();
+  _q.setFromUnitVectors(_C,_D);b.getWorldQuaternion(_Qw);b.parent.getWorldQuaternion(_Pq);
+  b.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
+}
+function ik(g,k,T,pole){
+  const r=g.rig,U=r.upper[k];U.scale.setScalar(1);g.group.updateMatrixWorld(true);
+  const S=U.getWorldPosition(V()),d=S.distanceTo(T),f=Math.min(1.5,Math.max(1,d/(r.lu[k]+r.ll[k]))),a=r.lu[k]*f,b=r.ll[k]*f;
+  const dd=Math.min(Math.max(d,Math.abs(a-b)+1e-3),a+b-1e-3);
+  _u.subVectors(T,S).normalize();
+  const x=(a*a-b*b+dd*dd)/(2*dd),hh=Math.sqrt(Math.max(0,a*a-x*x));
+  _ep.copy(pole).addScaledVector(_u,-pole.dot(_u));if(_ep.lengthSq()<1e-6)_ep.set(0,-1,0);_ep.normalize();
+  const E=S.clone().addScaledVector(_u,x).addScaledVector(_ep,hh);
+  U.scale.setScalar(f);aimBone(U,r.lower[k],E);aimBone(r.lower[k],r.wrist[k],T);
+}
+// hand/wrist rotation follows the controller (tune HAND_TILT / HAND_ROLL if the hands look rotated wrong)
+const HAND_TILT=-0.5,HAND_ROLL=0;
+const qAl=new THREE.Quaternion().setFromUnitVectors(V(0,1,0),V(0,0,-1)),qTl=new THREE.Quaternion().setFromAxisAngle(V(1,0,0),HAND_TILT);
+function handRot(g,k,cq){
+  const wr=g.rig.wrist[k];
+  _wq.copy(cq).multiply(qTl).multiply(qAl).multiply(_roll.setFromAxisAngle(V(0,1,0),k?-HAND_ROLL:HAND_ROLL));
+  wr.parent.getWorldQuaternion(_Pq);wr.quaternion.copy(_Pq.invert().multiply(_wq));
+}
 // ---------- player ----------
 const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],it:false,imm:0,safe:0,third:false,was:false};
 function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
@@ -117,7 +144,7 @@ addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domEleme
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns, <b>click the right thumbstick</b> for third person.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -197,7 +224,9 @@ function stepBots(dt,t){
 // ---------- VR (WebXR): headset = body, controllers = hands ----------
 const VS=1.4; // VR world scale: makes your real arms reach the ground like a gorilla's
 const grips=[0,1].map(i=>{const g=renderer.xr.getControllerGrip(i);rig.add(g);return g});
-const byHand=[null,null],vrPrev=[null,null];let vrInit=false,vrBtn=false,hudT=0;
+const byHand=[null,null],vrPrev=[null,null],tpOff=V(),_cq=new THREE.Quaternion(),_fw=V(),_rt=V(),_pole=V();
+let vrInit=false,vrBtn=false,vrStick=false,hudT=0,tpYaw=0,vrYaw=0,headS=0.001;
+function setHead(sc){P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(sc)})}
 const hc=document.createElement('canvas');hc.width=256;hc.height=128;const hx=hc.getContext('2d'),htex=new THREE.CanvasTexture(hc);
 const hudMesh=new THREE.Mesh(new THREE.PlaneGeometry(0.2,0.1),new THREE.MeshBasicMaterial({map:htex,transparent:true,depthTest:false}));
 hudMesh.rotation.x=-PI/2;hudMesh.position.y=0.06;hudMesh.renderOrder=10;
@@ -205,12 +234,12 @@ hudMesh.rotation.x=-PI/2;hudMesh.position.y=0.06;hudMesh.renderOrder=10;
   c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null;if(hd===0)grips[i].add(hudMesh)});
   c.addEventListener('disconnected',()=>{for(let k=0;k<2;k++)if(byHand[k]&&byHand[k].grip===grips[i]){byHand[k]=null;vrPrev[k]=null}})});
 renderer.xr.addEventListener('sessionstart',()=>{rig.scale.setScalar(VS);rig.position.set(P.pos.x,hgt(P.pos.x,P.pos.z)+0.5,P.pos.z);
-  P.vel.set(0,0,0);P.hist=[];P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(0.001)});vrInit=true;$('help').style.display='none'});
+  P.vel.set(0,0,0);P.hist=[];setHead(0.001);headS=0.001;tpOff.set(0,0,0);vrInit=true;$('help').style.display='none'});
 renderer.xr.addEventListener('sessionend',()=>{rig.scale.setScalar(1);rig.position.set(0,0,0);rig.rotation.set(0,0,0);
-  P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(1)});[0,1].forEach(k=>P.g.rig.upper[k].scale.set(1,1,1));reset();if(!locked)$('help').style.display='flex'});
+  setHead(1);tpOff.set(0,0,0);[0,1].forEach(k=>P.g.rig.upper[k].scale.set(1,1,1));reset();if(!locked)$('help').style.display='flex'});
 const _hd=V();
 function stepVR(dt){
-  rig.updateMatrixWorld(true);const xc=renderer.xr.getCamera();
+  rig.position.sub(tpOff);rig.updateMatrixWorld(true);const xc=renderer.xr.getCamera();
   const head=()=>rig.localToWorld(_hd.copy(xc.position));
   head();const pb=_hd.clone();pb.y-=0.5;
   if(vrInit){rig.position.y+=hgt(pb.x,pb.z)+R-pb.y;vrInit=false;rig.updateMatrixWorld(true);head();pb.copy(_hd);pb.y-=0.5}
@@ -241,13 +270,23 @@ function stepVR(dt){
   if(Math.abs(pn.x)>68){mv.x+=Math.sign(pn.x)*68-pn.x;P.vel.x=0}
   if(Math.abs(pn.z)>68){mv.z+=Math.sign(pn.z)*68-pn.z;P.vel.z=0}
   rig.position.add(mv);P.pos.copy(pb).add(mv);
-  const gg=P.g.group;gg.position.copy(P.pos);gg.rotation.y=_eu.setFromQuaternion(xc.quaternion,'YXZ').y+PI;gg.updateMatrixWorld(true);
-  for(let k=0;k<2;k++)if(w[k])aimAt(P.g,k,w[k].add(mv));
+  const gg=P.g.group;vrYaw=_eu.setFromQuaternion(xc.quaternion,'YXZ').y;
+  gg.position.copy(P.pos);gg.rotation.y=vrYaw+PI;gg.updateMatrixWorld(true);
+  _fw.set(-Math.sin(vrYaw),0,-Math.cos(vrYaw));_rt.set(Math.cos(vrYaw),0,-Math.sin(vrYaw));
+  for(let k=0;k<2;k++)if(w[k]){
+    _pole.set(0,-0.6,0).addScaledVector(_rt,k?0.6:-0.6).addScaledVector(_fw,-0.5);
+    ik(P.g,k,w[k].add(mv),_pole);handRot(P.g,k,byHand[k].grip.getWorldQuaternion(_cq));
+  }
   // any face button (A/B/X/Y) = respawn
   let pr=false;for(let k=0;k<2;k++){const gp=byHand[k]&&byHand[k].gp;if(gp&&((gp.buttons[4]&&gp.buttons[4].pressed)||(gp.buttons[5]&&gp.buttons[5].pressed)))pr=true}
   if(pr&&!vrBtn){rig.position.set(0,hgt(0,0)+0.5,0);P.vel.set(0,0,0);vrInit=true}vrBtn=pr;
+  const gp1=byHand[1]&&byHand[1].gp,st=!!(gp1&&gp1.buttons[3]&&gp1.buttons[3].pressed);if(st&&!vrStick)P.third=!P.third;vrStick=st;
   hudT-=dt;if(hudT<=0){hudT=0.3;hx.clearRect(0,0,256,128);hx.fillStyle='#000a';hx.fillRect(0,0,256,128);hx.fillStyle=P.it?'#ff6b6b':'#fff';
     hx.font='bold 30px sans-serif';hx.fillText(P.it?"YOU'RE IT!":'Run!',12,48);hx.font='24px sans-serif';hx.fillStyle='#fff';hx.fillText(P.safe.toFixed(1)+'s safe',12,92);htex.needsUpdate=true}
+  const hs=P.third?1:0.001;if(hs!==headS){setHead(hs);headS=hs}
+  if(P.third){tpYaw+=Math.atan2(Math.sin(vrYaw-tpYaw),Math.cos(vrYaw-tpYaw))*Math.min(1,1.5*dt);tpOff.set(Math.sin(tpYaw)*2.4,0.7,Math.cos(tpYaw)*2.4)}
+  else{tpOff.set(0,0,0);tpYaw=vrYaw}
+  rig.position.add(tpOff);
 }
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
