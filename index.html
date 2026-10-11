@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monke Tag - Fan Game</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#9fd3f5;font-family:system-ui,sans-serif}
+canvas{display:block}
+#hud{position:fixed;top:10px;left:10px;color:#fff;text-shadow:0 1px 4px #000;font-size:15px;pointer-events:none;line-height:1.5}
+#state{font-size:24px;font-weight:700}
+#help{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0008;color:#fff;text-align:center;font-size:17px;line-height:1.7;cursor:pointer}
+#help div{max-width:520px;padding:24px;background:#000a;border-radius:14px}
+#help b{color:#ffd54a}
+</style></head><body>
+<div id="hud"><div id="state"></div><div id="sub"></div></div>
+<div id="help"><div id="msg">Loading assets...</div></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {clone} from 'three/addons/utils/SkeletonUtils.js';
+
+const $=id=>document.getElementById(id), V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
+const R=0.55, RH=0.1, GRAV=9.8, MAXV=12, SENS=0.005, LOOK=0.0025, PI=Math.PI;
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x9fd3f5);scene.fog=new THREE.Fog(0x9fd3f5,70,230);
+scene.add(new THREE.HemisphereLight(0xffffff,0x6a8a4a,1.2));
+const sun=new THREE.DirectionalLight(0xffffff,2.2);sun.position.set(50,100,30);scene.add(sun);
+const cam=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.05,500);
+addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+
+// ---------- load assets ----------
+let mapGltf,playerGltf;
+try{
+  const L=new GLTFLoader();
+  [mapGltf,playerGltf]=await Promise.all([L.loadAsync('Empty_Rolling_Plain.glb'),L.loadAsync('Playermodel.glb')]);
+}catch(e){
+  $('msg').innerHTML='Could not load the .glb files.<br>Keep <b>Empty_Rolling_Plain.glb</b> and <b>Playermodel.glb</b> next to index.html, and open it through a web server (or GitHub Pages), not file://.';
+  throw e;
+}
+
+// ---------- map + heightfield ----------
+scene.add(mapGltf.scene);mapGltf.scene.updateMatrixWorld(true);
+let hf,N,minX,minZ,step;
+mapGltf.scene.traverse(o=>{if(!o.isMesh)return;
+  const g=o.geometry;g.computeVertexNormals();o.material.flatShading=false;o.material.needsUpdate=true;
+  const p=g.attributes.position,v=V(),pts=[];let mx=1e9,mz=1e9,Mx=-1e9;
+  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
+  N=Math.round(Math.sqrt(p.count));minX=mx;minZ=mz;step=(Mx-mx)/(N-1);hf=new Float32Array(N*N);
+  for(let i=0;i<pts.length;i+=3){const ix=Math.round((pts[i]-minX)/step),iz=Math.round((pts[i+2]-minZ)/step);hf[iz*N+ix]=pts[i+1]}
+});
+function hgt(x,z){
+  const fx=Math.min(Math.max((x-minX)/step,0),N-1.001),fz=Math.min(Math.max((z-minZ)/step,0),N-1.001);
+  const ix=fx|0,iz=fz|0,tx=fx-ix,tz=fz-iz,a=hf[iz*N+ix],b=hf[iz*N+ix+1],c=hf[(iz+1)*N+ix],d=hf[(iz+1)*N+ix+1];
+  return (a*(1-tx)+b*tx)*(1-tz)+(c*(1-tx)+d*tx)*tz;
+}
+
+// ---------- gorilla rig (arm bones aimed at a target direction) ----------
+const markGeo=new THREE.SphereGeometry(0.13),markMat=new THREE.MeshBasicMaterial({color:0xff2222});
+function makeGorilla(){
+  const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
+  const rig={upper:[],wrist:[],sh:[],len:[]};
+  model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh)o.frustumCulled=false;
+    const n=o.name.replace(/\s/g,'');
+    if(n.startsWith('UpperArmL'))rig.upper[0]=o;if(n.startsWith('UpperArmR'))rig.upper[1]=o;
+    if(n.startsWith('WristL'))rig.wrist[0]=o;if(n.startsWith('WristR'))rig.wrist[1]=o;});
+  group.updateMatrixWorld(true);
+  for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w)}
+  const mark=new THREE.Mesh(markGeo,markMat);mark.position.set(0,0.95,0);mark.visible=false;group.add(mark);
+  return {group,rig,mark};
+}
+const _S=V(),_W=V(),_C=V(),_D=V(),_q=new THREE.Quaternion(),_Qw=new THREE.Quaternion(),_Pq=new THREE.Quaternion();
+// arm direction in gorilla-local space: a = swing forward(+)/back(-), b = swing outward
+function armDir(k,a,b,out){const s=k?-1:1;return out.set(s*Math.sin(b)*Math.cos(a),-Math.cos(b)*Math.cos(a),Math.sin(a)).normalize()}
+function armOffset(g,k,a,b,out){return out.copy(armDir(k,a,b,_D)).multiplyScalar(g.rig.len[k]).add(g.rig.sh[k])}
+function aim(g,k,a,b){
+  const up=g.rig.upper[k];g.group.updateMatrixWorld(true);
+  up.getWorldPosition(_S);g.rig.wrist[k].getWorldPosition(_W);_C.subVectors(_W,_S).normalize();
+  armDir(k,a,b,_D).applyQuaternion(g.group.quaternion);
+  _q.setFromUnitVectors(_C,_D);up.getWorldQuaternion(_Qw);up.parent.getWorldQuaternion(_Pq);
+  up.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
+}
+
+// ---------- player ----------
+const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],it:false,imm:0,safe:0,third:false,was:false};
+function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
+  for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
+reset();
+
+// ---------- bots ----------
+const bots=[];
+for(let i=0;i<5;i++){
+  const g=makeGorilla(),ang=Math.random()*PI*2,r=20+Math.random()*35;
+  bots.push({g,pos:V(Math.cos(ang)*r,0,Math.sin(ang)*r),yaw:0,it:false,imm:0,ph:Math.random()*6,wander:Math.random()*6});
+}
+bots[0].it=true;
+
+// ---------- input ----------
+const key={},btn={0:false,2:false};let locked=false,msgShown=false;
+addEventListener('keydown',e=>{key[e.code]=true;if(e.code==='KeyV')P.third=!P.third;if(e.code==='KeyR')reset()});
+addEventListener('keyup',e=>key[e.code]=false);
+addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domElement.requestPointerLock()});
+addEventListener('mouseup',e=>btn[e.button]=false);
+$('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
+document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br>Don\'t get tagged by the red-marked gorilla. <b>V</b> camera, <b>R</b> reset';
+addEventListener('mousemove',e=>{
+  if(!locked)return;
+  const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
+  if(!act[0]&&!act[1]){P.yaw-=e.movementX*LOOK;P.pitch=Math.max(-1.4,Math.min(1.4,P.pitch-e.movementY*LOOK));return}
+  for(let k=0;k<2;k++)if(act[k]){
+    P.a[k]=Math.max(-1.4,Math.min(1.6,P.a[k]-e.movementY*SENS));
+    P.b[k]=Math.max(-0.3,Math.min(1.5,P.b[k]+e.movementX*SENS*(k?1:-1)));
+  }
+});
+
+// ---------- simulation ----------
+const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
+function stepPlayer(dt){
+  const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
+  P.g.group.rotation.y=P.yaw+PI;P.g.group.updateMatrixWorld(true);gq.copy(P.g.group.quaternion);
+  for(let k=0;k<2;k++)if(!act[k]&&!P.touch[k]){P.a[k]+=(0-P.a[k])*Math.min(1,6*dt);P.b[k]+=(0.15-P.b[k])*Math.min(1,6*dt)}
+  disp.set(0,0,0);let touching=false;const off=[V(),V()],ow=[V(),V()];
+  for(let k=0;k<2;k++){
+    armOffset(P.g,k,P.a[k],P.b[k],off[k]);ow[k].copy(off[k]).applyQuaternion(gq);
+    _p.copy(P.prev[k]).applyQuaternion(gq);_dl.subVectors(ow[k],_p);
+    const wx=P.pos.x+ow[k].x,wy=P.pos.y+ow[k].y,wz=P.pos.z+ow[k].z,h=hgt(wx,wz);
+    if(wy-RH<h+0.03){disp.sub(_dl);touching=true;P.touch[k]=true}else P.touch[k]=false;
+    P.prev[k].copy(off[k]);
+  }
+  if(touching){
+    P.pos.add(disp);
+    for(let k=0;k<2;k++)if(P.touch[k]){const wy=P.pos.y+ow[k].y,h=hgt(P.pos.x+ow[k].x,P.pos.z+ow[k].z);if(wy-RH<h)P.pos.y+=h+RH-wy}
+    P.hist.push(disp.clone().divideScalar(dt));if(P.hist.length>5)P.hist.shift();
+    P.vel.set(0,0,0);P.hist.forEach(v=>P.vel.add(v));P.vel.divideScalar(P.hist.length);
+    if(P.vel.length()>MAXV)P.vel.setLength(MAXV);
+  }else{
+    if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>MAXV)P.vel.setLength(MAXV)}
+    P.hist=[];P.vel.y-=GRAV*dt;P.pos.addScaledVector(P.vel,dt);
+  }
+  P.was=touching;
+  const h=hgt(P.pos.x,P.pos.z);
+  if(P.pos.y-R<h){P.pos.y=h+R;if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
+  if(Math.abs(P.pos.x)>68){P.pos.x=Math.sign(P.pos.x)*68;P.vel.x=0}
+  if(Math.abs(P.pos.z)>68){P.pos.z=Math.sign(P.pos.z)*68;P.vel.z=0}
+  P.g.group.position.copy(P.pos);P.g.group.updateMatrixWorld(true);
+  aim(P.g,0,P.a[0],P.b[0]);aim(P.g,1,P.a[1],P.b[1]);
+}
+function stepBots(dt,t){
+  const all=[P,...bots];
+  for(const b of bots){
+    b.imm=Math.max(0,b.imm-dt);
+    let tgt=null,best=1e9;
+    for(const o of all){if(o===b)continue;const d=b.pos.distanceTo(o.pos||o.g.group.position);
+      if(b.it?(!o.it&&o.imm<=0):o.it){if(d<best){best=d;tgt=o}}}
+    const tp=tgt&&(tgt.pos||tgt.g.group.position);let dx=0,dz=0,sp=5;
+    if(b.it){sp=6;if(tp){dx=tp.x-b.pos.x;dz=tp.z-b.pos.z}}
+    else if(tp&&best<35){dx=b.pos.x-tp.x;dz=b.pos.z-tp.z;sp=5.6}
+    else{b.wander+=dt*0.5;dx=Math.cos(b.wander);dz=Math.sin(b.wander);sp=2.5}
+    const r=Math.hypot(b.pos.x,b.pos.z);if(r>58){dx-=b.pos.x*0.08;dz-=b.pos.z*0.08}
+    if(b.imm>0&&b.it)sp=0;
+    const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;
+    b.pos.x+=dx*sp*dt;b.pos.z+=dz*sp*dt;b.pos.y=hgt(b.pos.x,b.pos.z)+R;
+    if(sp>0){let d=Math.atan2(dx,dz)-b.yaw;d=Math.atan2(Math.sin(d),Math.cos(d));b.yaw+=d*Math.min(1,8*dt)}
+    const g=b.g.group;g.position.copy(b.pos);g.rotation.y=b.yaw;g.updateMatrixWorld(true);
+    const sw=sp>0?Math.sin(t*10+b.ph)*0.9:0;
+    aim(b.g,0,sw,0.25);aim(b.g,1,-sw,0.25);b.g.mark.visible=b.it;
+  }
+  P.g.mark.visible=P.it&&P.third;P.imm=Math.max(0,P.imm-dt);
+  for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++){
+    const A=all[i],B=all[j];if(A.it===B.it)continue;
+    const pa=A.pos||A.g.group.position,pb=B.pos||B.g.group.position;
+    if(pa.distanceTo(pb)<1.4){const it=A.it?A:B,ot=A.it?B:A;
+      if(it.imm<=0&&ot.imm<=0){it.it=false;ot.it=true;it.imm=ot.imm=2.5}}
+  }
+}
+const clock=new THREE.Clock();let t=0;
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),1/30);t+=dt;
+  if(locked||true){stepPlayer(dt);stepBots(dt,t)}
+  if(!P.it)P.safe+=dt;
+  const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
+  if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
+  else{cam.position.copy(P.g.group.localToWorld(V(0,0.5,0.28)));cam.rotation.set(P.pitch,P.yaw,0,'YXZ')}
+  $('state').textContent=P.it?"YOU'RE IT! Tag a gorilla!":'Run! Stay untagged';
+  $('state').style.color=P.it?'#ff6b6b':'#fff';
+  $('sub').textContent=`Time not "it": ${P.safe.toFixed(1)}s   Speed: ${P.vel.length().toFixed(1)} m/s`;
+  renderer.render(scene,cam);
+});
+</script></body></html>
