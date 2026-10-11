@@ -98,14 +98,14 @@ bots[0].it=true;
 
 // ---------- input ----------
 const key={},btn={0:false,2:false};let locked=false,msgShown=false;
-addEventListener('keydown',e=>{key[e.code]=true;if(e.code==='KeyV')P.third=!P.third;if(e.code==='KeyR')reset()});
+addEventListener('keydown',e=>{key[e.code]=true;if(e.code==='KeyV'||e.code==='KeyP')P.third=!P.third;if(e.code.startsWith('Arrow'))e.preventDefault();if(e.code==='KeyR')reset()});
 addEventListener('keyup',e=>key[e.code]=false);
 addEventListener('contextmenu',e=>e.preventDefault());
 addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domElement.requestPointerLock()});
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br>Don\'t get tagged by the red-marked gorilla. <b>V</b> camera, <b>R</b> reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -120,6 +120,12 @@ addEventListener('mousemove',e=>{
 const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
 function stepPlayer(dt){
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
+  const kx=(key.ArrowRight?1:0)-(key.ArrowLeft?1:0),ky=(key.ArrowUp?1:0)-(key.ArrowDown?1:0);
+  if(!act[0]&&!act[1]){P.yaw-=kx*2*dt;P.pitch=Math.max(-1.4,Math.min(1.4,P.pitch+ky*2*dt))}
+  for(let k=0;k<2;k++)if(act[k]){
+    P.a[k]=Math.max(-1.4,Math.min(1.6,P.a[k]+ky*5*dt));
+    P.b[k]=Math.max(-0.3,Math.min(1.5,P.b[k]+kx*5*dt*(k?1:-1)));
+  }
   P.g.group.rotation.y=P.yaw+PI;P.g.group.updateMatrixWorld(true);gq.copy(P.g.group.quaternion);
   for(let k=0;k<2;k++)if(!act[k]&&!P.touch[k]){P.a[k]+=(0-P.a[k])*Math.min(1,6*dt);P.b[k]+=(0.15-P.b[k])*Math.min(1,6*dt)}
   disp.set(0,0,0);let touching=false;const off=[V(),V()],ow=[V(),V()];
