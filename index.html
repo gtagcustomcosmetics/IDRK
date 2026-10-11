@@ -18,6 +18,7 @@ canvas{display:block}
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
+import {Reflector} from 'three/addons/objects/Reflector.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 
 const $=id=>document.getElementById(id), V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
@@ -73,6 +74,14 @@ function hgt(x,z){
   return (a*(1-tx)+b*tx)*(1-tz)+(c*(1-tx)+d*tx)*tz;
 }
 
+// ---------- mirror (stands in front of the spawn point, facing it) ----------
+{
+  const mx=0,mz=-3.5,base=Math.min(hgt(mx-1.5,mz),hgt(mx,mz),hgt(mx+1.5,mz));
+  const mir=new Reflector(new THREE.PlaneGeometry(3,2.2),{clipBias:0.003,textureWidth:1024,textureHeight:768,color:0xdddddd});
+  mir.position.set(mx,base+1.4,mz);scene.add(mir);
+  const fr=new THREE.Mesh(new THREE.BoxGeometry(3.3,2.9,0.12),new THREE.MeshStandardMaterial({color:0x5a3a1e,roughness:0.8}));
+  fr.position.set(mx,base+1.15,mz-0.07);scene.add(fr);
+}
 // ---------- gorilla rig (arm bones aimed at a target direction) ----------
 function makeGorilla(){
   const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
@@ -148,7 +157,7 @@ addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domEleme
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns, <b>click the right thumbstick</b> for third person.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look. A mirror stands in front of you.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns, <b>click the right thumbstick</b> for third person.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
