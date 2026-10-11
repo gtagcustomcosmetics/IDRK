@@ -44,12 +44,26 @@ try{
 }
 
 // ---------- map + heightfield ----------
+function groundTexture(){
+  const S=512,c=document.createElement('canvas');c.width=c.height=S;const x=c.getContext('2d');
+  x.fillStyle='#6a9a47';x.fillRect(0,0,S,S);
+  const rnd=(a,b)=>a+Math.random()*(b-a),wrap=f=>{for(const dx of[-S,0,S])for(const dy of[-S,0,S])f(dx,dy)};
+  for(let i=0;i<45;i++){const px=rnd(0,S),py=rnd(0,S),r=rnd(30,90),col=Math.random()<.5?'rgba(150,190,80,.10)':'rgba(40,90,40,.10)';
+    wrap((dx,dy)=>{x.fillStyle=col;x.beginPath();x.arc(px+dx,py+dy,r,0,7);x.fill()})}
+  for(let i=0;i<14000;i++){const px=rnd(0,S),py=rnd(0,S),l=rnd(3,9),a=rnd(-.5,.5)-1.57,h=rnd(75,115),li=rnd(28,52);
+    x.strokeStyle=`hsl(${h},50%,${li}%)`;x.lineWidth=rnd(.7,1.6);
+    wrap((dx,dy)=>{x.beginPath();x.moveTo(px+dx,py+dy);x.lineTo(px+dx+Math.cos(a)*l,py+dy+Math.sin(a)*l);x.stroke()})}
+  for(let i=0;i<300;i++){const px=rnd(0,S),py=rnd(0,S);x.fillStyle=Math.random()<.5?'rgba(255,240,150,.7)':'rgba(255,255,255,.6)';
+    wrap((dx,dy)=>x.fillRect(px+dx,py+dy,2,2))}
+  const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=8;return t;
+}
 scene.add(mapGltf.scene);mapGltf.scene.updateMatrixWorld(true);
 let hf,N,minX,minZ,step;
 mapGltf.scene.traverse(o=>{if(!o.isMesh)return;
   const g=o.geometry;g.computeVertexNormals();o.material.flatShading=false;o.material.needsUpdate=true;
-  const p=g.attributes.position,v=V(),pts=[];let mx=1e9,mz=1e9,Mx=-1e9;
-  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
+  const p=g.attributes.position,v=V(),pts=[],uv=new Float32Array(p.count*2);let mx=1e9,mz=1e9,Mx=-1e9;
+  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);uv[i*2]=v.x/8;uv[i*2+1]=v.z/8;mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
+  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));o.material.map=groundTexture();o.material.color.set(0xffffff);o.material.needsUpdate=true;
   N=Math.round(Math.sqrt(p.count));minX=mx;minZ=mz;step=(Mx-mx)/(N-1);hf=new Float32Array(N*N);
   for(let i=0;i<pts.length;i+=3){const ix=Math.round((pts[i]-minX)/step),iz=Math.round((pts[i+2]-minZ)/step);hf[iz*N+ix]=pts[i+1]}
 });
@@ -60,7 +74,6 @@ function hgt(x,z){
 }
 
 // ---------- gorilla rig (arm bones aimed at a target direction) ----------
-const markGeo=new THREE.SphereGeometry(0.13),markMat=new THREE.MeshBasicMaterial({color:0xff2222});
 function makeGorilla(){
   const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
   const rig={upper:[],lower:[],wrist:[],sh:[],len:[],lu:[],ll:[]};
@@ -71,8 +84,7 @@ function makeGorilla(){
     if(n.startsWith('WristL'))rig.wrist[0]=o;if(n.startsWith('WristR'))rig.wrist[1]=o;});
   group.updateMatrixWorld(true);
   for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w);const l=rig.lower[k].getWorldPosition(V());rig.lu[k]=s.distanceTo(l);rig.ll[k]=l.distanceTo(w)}
-  const mark=new THREE.Mesh(markGeo,markMat);mark.position.set(0,0.95,0);mark.visible=false;group.add(mark);
-  return {group,rig,mark};
+  return {group,rig};
 }
 const _S=V(),_W=V(),_C=V(),_D=V(),_q=new THREE.Quaternion(),_Qw=new THREE.Quaternion(),_Pq=new THREE.Quaternion();
 // arm direction in gorilla-local space: a = swing forward(+)/back(-), b = swing outward
@@ -122,18 +134,10 @@ function handRot(g,k,cq){
   wr.parent.getWorldQuaternion(_Pq);wr.quaternion.copy(_Pq.invert().multiply(_wq));
 }
 // ---------- player ----------
-const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],it:false,imm:0,safe:0,third:false,was:false};
+const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],third:false,was:false};
 function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
-
-// ---------- bots ----------
-const bots=[];
-for(let i=0;i<5;i++){
-  const g=makeGorilla(),ang=Math.random()*PI*2,r=20+Math.random()*35;
-  bots.push({g,pos:V(Math.cos(ang)*r,0,Math.sin(ang)*r),yaw:0,it:false,imm:0,ph:Math.random()*6,wander:Math.random()*6});
-}
-bots[0].it=true;
 
 // ---------- input ----------
 const key={},btn={0:false,2:false};let locked=false,msgShown=false;
@@ -144,7 +148,7 @@ addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domEleme
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns, <b>click the right thumbstick</b> for third person.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br>Don\'t get tagged by the red-marked gorilla. <b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Any face button respawns, <b>click the right thumbstick</b> for third person.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -193,45 +197,14 @@ function stepPlayer(dt){
   P.g.group.position.copy(P.pos);P.g.group.updateMatrixWorld(true);
   aim(P.g,0,P.a[0],P.b[0]);aim(P.g,1,P.a[1],P.b[1]);
 }
-function stepBots(dt,t){
-  const all=[P,...bots];
-  for(const b of bots){
-    b.imm=Math.max(0,b.imm-dt);
-    let tgt=null,best=1e9;
-    for(const o of all){if(o===b)continue;const d=b.pos.distanceTo(o.pos||o.g.group.position);
-      if(b.it?(!o.it&&o.imm<=0):o.it){if(d<best){best=d;tgt=o}}}
-    const tp=tgt&&(tgt.pos||tgt.g.group.position);let dx=0,dz=0,sp=5;
-    if(b.it){sp=6;if(tp){dx=tp.x-b.pos.x;dz=tp.z-b.pos.z}}
-    else if(tp&&best<35){dx=b.pos.x-tp.x;dz=b.pos.z-tp.z;sp=5.6}
-    else{b.wander+=dt*0.5;dx=Math.cos(b.wander);dz=Math.sin(b.wander);sp=2.5}
-    const r=Math.hypot(b.pos.x,b.pos.z);if(r>58){dx-=b.pos.x*0.08;dz-=b.pos.z*0.08}
-    if(b.imm>0&&b.it)sp=0;
-    const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;
-    b.pos.x+=dx*sp*dt;b.pos.z+=dz*sp*dt;b.pos.y=hgt(b.pos.x,b.pos.z)+R;
-    if(sp>0){let d=Math.atan2(dx,dz)-b.yaw;d=Math.atan2(Math.sin(d),Math.cos(d));b.yaw+=d*Math.min(1,8*dt)}
-    const g=b.g.group;g.position.copy(b.pos);g.rotation.y=b.yaw;g.updateMatrixWorld(true);
-    const sw=sp>0?Math.sin(t*10+b.ph)*0.9:0;
-    aim(b.g,0,sw,0.25);aim(b.g,1,-sw,0.25);b.g.mark.visible=b.it;
-  }
-  P.g.mark.visible=P.it&&P.third;P.imm=Math.max(0,P.imm-dt);
-  for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++){
-    const A=all[i],B=all[j];if(A.it===B.it)continue;
-    const pa=A.pos||A.g.group.position,pb=B.pos||B.g.group.position;
-    if(pa.distanceTo(pb)<1.4){const it=A.it?A:B,ot=A.it?B:A;
-      if(it.imm<=0&&ot.imm<=0){it.it=false;ot.it=true;it.imm=ot.imm=2.5}}
-  }
-}
 // ---------- VR (WebXR): headset = body, controllers = hands ----------
 const VS=1.4; // VR world scale: makes your real arms reach the ground like a gorilla's
 const grips=[0,1].map(i=>{const g=renderer.xr.getControllerGrip(i);rig.add(g);return g});
 const byHand=[null,null],vrPrev=[null,null],tpOff=V(),_cq=new THREE.Quaternion(),_fw=V(),_rt=V(),_pole=V();
 let vrInit=false,vrBtn=false,vrStick=false,hudT=0,tpYaw=0,vrYaw=0,headS=0.001;
 function setHead(sc){P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(sc)})}
-const hc=document.createElement('canvas');hc.width=256;hc.height=128;const hx=hc.getContext('2d'),htex=new THREE.CanvasTexture(hc);
-const hudMesh=new THREE.Mesh(new THREE.PlaneGeometry(0.2,0.1),new THREE.MeshBasicMaterial({map:htex,transparent:true,depthTest:false}));
-hudMesh.rotation.x=-PI/2;hudMesh.position.y=0.06;hudMesh.renderOrder=10;
 [0,1].forEach(i=>{const c=renderer.xr.getController(i);rig.add(c);
-  c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null;if(hd===0)grips[i].add(hudMesh)});
+  c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null});
   c.addEventListener('disconnected',()=>{for(let k=0;k<2;k++)if(byHand[k]&&byHand[k].grip===grips[i]){byHand[k]=null;vrPrev[k]=null}})});
 renderer.xr.addEventListener('sessionstart',()=>{rig.scale.setScalar(VS);rig.position.set(P.pos.x,hgt(P.pos.x,P.pos.z)+0.5,P.pos.z);
   P.vel.set(0,0,0);P.hist=[];setHead(0.001);headS=0.001;tpOff.set(0,0,0);vrInit=true;$('help').style.display='none'});
@@ -281,8 +254,6 @@ function stepVR(dt){
   let pr=false;for(let k=0;k<2;k++){const gp=byHand[k]&&byHand[k].gp;if(gp&&((gp.buttons[4]&&gp.buttons[4].pressed)||(gp.buttons[5]&&gp.buttons[5].pressed)))pr=true}
   if(pr&&!vrBtn){rig.position.set(0,hgt(0,0)+0.5,0);P.vel.set(0,0,0);vrInit=true}vrBtn=pr;
   const gp1=byHand[1]&&byHand[1].gp,st=!!(gp1&&gp1.buttons[3]&&gp1.buttons[3].pressed);if(st&&!vrStick)P.third=!P.third;vrStick=st;
-  hudT-=dt;if(hudT<=0){hudT=0.3;hx.clearRect(0,0,256,128);hx.fillStyle='#000a';hx.fillRect(0,0,256,128);hx.fillStyle=P.it?'#ff6b6b':'#fff';
-    hx.font='bold 30px sans-serif';hx.fillText(P.it?"YOU'RE IT!":'Run!',12,48);hx.font='24px sans-serif';hx.fillStyle='#fff';hx.fillText(P.safe.toFixed(1)+'s safe',12,92);htex.needsUpdate=true}
   const hs=P.third?1:0.001;if(hs!==headS){setHead(hs);headS=hs}
   if(P.third){tpYaw+=Math.atan2(Math.sin(vrYaw-tpYaw),Math.cos(vrYaw-tpYaw))*Math.min(1,1.5*dt);tpOff.set(Math.sin(tpYaw)*2.4,0.7,Math.cos(tpYaw)*2.4)}
   else{tpOff.set(0,0,0);tpYaw=vrYaw}
@@ -291,15 +262,12 @@ function stepVR(dt){
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
-  if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);stepBots(dt,t);
-  if(!P.it)P.safe+=dt;
+  if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
   else{cam.position.copy(P.g.group.localToWorld(V(0,0.5,0.28)));cam.rotation.set(P.pitch,P.yaw,0,'YXZ')}
-  $('state').textContent=P.it?"YOU'RE IT! Tag a gorilla!":'Run! Stay untagged';
-  $('state').style.color=P.it?'#ff6b6b':'#fff';
-  $('sub').textContent=`Time not "it": ${P.safe.toFixed(1)}s   Speed: ${P.vel.length().toFixed(1)} m/s`;
+  $('sub').textContent=`Speed: ${P.vel.length().toFixed(1)} m/s`;
   renderer.render(scene,cam);
 });
 </script></body></html>
