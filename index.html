@@ -510,9 +510,7 @@ function stepVR(dt){
   rig.position.add(mv);P.pos.copy(pb).add(mv);
   const gg=P.g.group;
   // Keep the body upright and facing the headset's yaw; apply looking up/down only to the head bone.
-  xc.getWorldQuaternion(_headWorldQ);
-  rig.getWorldQuaternion(_rigWorldQ);
-  _headLocalQ.copy(_rigWorldQ).invert().multiply(_headWorldQ);
+  _headLocalQ.copy(xc.quaternion); // headset pose relative to the rig; the rig's own turn is added to vrYaw below
   _eu.setFromQuaternion(_headLocalQ,'YXZ');
   const headPitch=Math.max(-1.0,Math.min(1.0,_eu.x));
   vrYaw=_eu.y+rig.rotation.y;
@@ -564,7 +562,7 @@ const _rc=new THREE.Raycaster(),_mo=V(),_md=V(),_mq=new THREE.Quaternion();
 function setMenu(on){
   if(on===menuOpen)return;menuOpen=on;menuG.visible=on;lasers.forEach(l=>l.visible=on);
   if(!on)return;
-  const xc=renderer.xr.getCamera();rig.localToWorld(_mo.copy(xc.position));xc.getWorldQuaternion(_mq);
+  const xc=renderer.xr.getCamera();rig.localToWorld(_mo.copy(xc.position));_mq.copy(rig.quaternion).multiply(xc.quaternion);
   _md.set(0,0,-1).applyQuaternion(_mq);_md.y=0;if(_md.lengthSq()<1e-4)_md.set(0,0,-1);_md.normalize();
   menuG.position.copy(_mo).addScaledVector(_md,1);menuG.position.y=_mo.y-0.05;
   menuG.lookAt(_mo.x,menuG.position.y,_mo.z);menuG.updateMatrixWorld(true);
