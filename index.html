@@ -331,7 +331,7 @@ addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domEleme
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look. A mirror stands in front of you.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Right A/B respawns, <b>click right thumbstick</b> = third person, <b>click left thumbstick</b> = next hat, left X = hat color, left Y = fur color.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look. Use <b>WASD</b> to walk around. A mirror stands in front of you.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Right A/B respawns, <b>click right thumbstick</b> = third person, <b>click left thumbstick</b> = next hat, left X = hat color, left Y = fur color.<br><b>Keyboard:</b> <b>WASD</b> = move, mouse = look. Hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -346,6 +346,15 @@ addEventListener('mousemove',e=>{
 const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
 function stepPlayer(dt){
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
+  // Desktop walking controls: WASD moves relative to the direction you're looking.
+  const forward=(key.KeyW?1:0)-(key.KeyS?1:0);
+  const strafe=(key.KeyD?1:0)-(key.KeyA?1:0);
+  if(forward||strafe){
+    const mag=Math.hypot(forward,strafe);
+    const speed=5.5*dt/mag;
+    P.pos.x+=(-Math.sin(P.yaw)*forward+Math.cos(P.yaw)*strafe)*speed;
+    P.pos.z+=(-Math.cos(P.yaw)*forward-Math.sin(P.yaw)*strafe)*speed;
+  }
   const kx=(key.ArrowRight?1:0)-(key.ArrowLeft?1:0),ky=(key.ArrowUp?1:0)-(key.ArrowDown?1:0);
   if(!act[0]&&!act[1]){P.yaw-=kx*2*dt;P.pitch=Math.max(-1.4,Math.min(1.4,P.pitch+ky*2*dt))}
   for(let k=0;k<2;k++)if(act[k]){
