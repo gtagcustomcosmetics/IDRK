@@ -35,6 +35,8 @@ import {VRButton} from 'three/addons/webxr/VRButton.js';
 
 const $=id=>document.getElementById(id), V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
 const R=0.55, RH=0.1, GRAV=9.8, MAXV=12, SENS=0.005, LOOK=0.0025, PI=Math.PI;
+let SIZE=1; // desktop body size multiplier (number keys)
+function setSize(v){if(v===SIZE)return;SIZE=v;P.hist=[]}
 const FUR_MATCH=/fur/i; // name of the fur material in your .glb (if no material matches, the biggest mesh is tinted)
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -143,7 +145,7 @@ function aimBone(b,c,tp){
 }
 function ik(g,k,T,pole){
   const r=g.rig,U=r.upper[k];U.scale.set(1,1,1);g.group.updateMatrixWorld(true);
-  const S=U.getWorldPosition(V()),d=S.distanceTo(T),f=Math.min(1.7,Math.max(1,d/(r.lu[k]+r.ll[k]))),a=r.lu[k]*f,b=r.ll[k]*f;
+  const gs=g.group.scale.x,S=U.getWorldPosition(V()),d=S.distanceTo(T),f=Math.min(1.7,Math.max(1,d/((r.lu[k]+r.ll[k])*gs))),a=r.lu[k]*gs*f,b=r.ll[k]*gs*f;
   const dd=Math.min(Math.max(d,Math.abs(a-b)+1e-3),a+b-1e-3);
   _u.subVectors(T,S).normalize();
   const x=(a*a-b*b+dd*dd)/(2*dd),hh=Math.sqrt(Math.max(0,a*a-x*x));
@@ -161,7 +163,7 @@ function handRot(g,k,cq){
 }
 // ---------- player ----------
 const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],third:false,was:false};
-function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
+function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+(R+0.2)*SIZE;P.vel.set(0,0,0);P.hist=[];
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
 
@@ -200,7 +202,7 @@ function furTick(t){if(P.g.fur===-1)rainbow(P.g,t);remotes.forEach(r=>{if(r.g.fu
 const cos={hat:0,col:0,fur:0xffffff};let net=null;
 try{const sv=JSON.parse(localStorage.getItem('monkeCos')||'{}');if(sv.hat>=0&&sv.hat<hatDefs.length)cos.hat=sv.hat|0;if(sv.col>=0&&sv.col<COLS.length)cos.col=sv.col|0;if(typeof sv.fur==='number')cos.fur=sv.fur}catch(e){}
 const cosEl=document.createElement('div');cosEl.id='cos';
-cosEl.innerHTML='<b>Wardrobe</b><div id="hl"></div><div id="cl"></div><b>Fur color</b><div id="fl"></div><small>In game: <b>H</b> hat, <b>C</b> hat color, <b>F</b> fur color.<br>Check yourself in the mirror!<br>Click outside this box to play.</small>';
+cosEl.innerHTML='<b>Wardrobe</b><div id="hl"></div><div id="cl"></div><b>Fur color</b><div id="fl"></div><small>In game: <b>H</b> hat, <b>C</b> hat color, <b>F</b> fur color.<br>Check yourself in the mirror!<br>Press <b>1-9</b> to change your size (1 = normal, 0 = half).<br>Click outside this box to play.</small>';
 $('help').appendChild(cosEl);['click','mousedown'].forEach(ev=>cosEl.addEventListener(ev,e=>e.stopPropagation()));
 hatDefs.forEach((h,i)=>{const b=document.createElement('button');b.textContent=h[0];b.onclick=()=>{cos.hat=i;wearHat()};$('hl').appendChild(b)});
 COLS.forEach((c,i)=>{const d=document.createElement('span');d.className='sw';d.style.background='#'+c.toString(16).padStart(6,'0');d.onclick=()=>{cos.col=i;wearHat()};$('cl').appendChild(d)});
@@ -308,7 +310,7 @@ function stepRemotes(dt){
   const k=Math.min(1,12*dt);
   remotes.forEach(r=>{const d=r.tp;if(!d)return;
     r.pos.lerp(_tv.set(d.p[0],d.p[1],d.p[2]),k);r.ry+=Math.atan2(Math.sin(d.r-r.ry),Math.cos(d.r-r.ry))*k;
-    r.g.group.position.copy(r.pos);r.g.group.rotation.y=r.ry;r.g.group.updateMatrixWorld(true);
+    r.g.group.position.copy(r.pos);r.g.group.scale.setScalar(d.s||1);r.g.group.rotation.y=r.ry;r.g.group.updateMatrixWorld(true);
     const yaw=r.ry-PI;_fw.set(-Math.sin(yaw),0,-Math.cos(yaw));_rt.set(Math.cos(yaw),0,-Math.sin(yaw));
     for(let i=0;i<2;i++){r.h[i].lerp(_tv.set(d.h[i*3],d.h[i*3+1],d.h[i*3+2]),k);
       _pole.set(0,-.6,0).addScaledVector(_rt,i?.6:-.6).addScaledVector(_fw,-.5);ik(r.g,i,r.h[i],_pole)}
@@ -320,7 +322,7 @@ function netTick(dt){
   remotes.forEach((r,id)=>{if(now-r.last>8000){net.conns.forEach((c,k)=>{if(key_(k)===id){try{c.close()}catch(e){}net.conns.delete(k);if(k===HOST_ID&&!net.host)claimHost()}});dropRemote(id)}});
   netT-=dt;if(netT>0||!net.conns.size)return;netT=1/15;
   const g=P.g.group,a=P.g.rig.wrist[0].getWorldPosition(V()),b=P.g.rig.wrist[1].getWorldPosition(V());
-  netSend({t:'s',p:fl([g.position.x,g.position.y,g.position.z]),r:Math.round(g.rotation.y*100)/100,h:fl([a.x,a.y,a.z,b.x,b.y,b.z])});
+  netSend({t:'s',p:fl([g.position.x,g.position.y,g.position.z]),r:Math.round(g.rotation.y*100)/100,h:fl([a.x,a.y,a.z,b.x,b.y,b.z]),s:renderer.xr.isPresenting?1:SIZE});
 }
 joinLobby();
 
@@ -384,7 +386,7 @@ setVoice(true);
 
 // ---------- input ----------
 const key={},btn={0:false,2:false};let locked=false,msgShown=false;
-addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;key[e.code]=true;if(e.code==='KeyV'||e.code==='KeyP')P.third=!P.third;if(e.code==='KeyH')cycleHat(1);if(e.code==='KeyC')cycleCol(1);if(e.code==='KeyF')cycleFur();if(e.code.startsWith('Arrow'))e.preventDefault();if(e.code==='KeyR')reset()});
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;key[e.code]=true;if(e.code==='KeyV'||e.code==='KeyP')P.third=!P.third;if(e.code==='KeyH')cycleHat(1);if(e.code==='KeyC')cycleCol(1);if(e.code==='KeyF')cycleFur();if(e.code.startsWith('Arrow'))e.preventDefault();if(e.code==='KeyR')reset();const dm=/^(?:Digit|Numpad)(\d)$/.exec(e.code);if(dm&&!e.ctrlKey&&!e.metaKey&&!e.altKey)setSize(dm[1]==='0'?0.5:+dm[1])});
 addEventListener('keyup',e=>key[e.code]=false);
 addEventListener('contextmenu',e=>e.preventDefault());
 addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domElement.requestPointerLock()});
@@ -405,13 +407,14 @@ addEventListener('mousemove',e=>{
 // ---------- simulation ----------
 const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
 function stepPlayer(dt){
+  P.g.group.scale.setScalar(SIZE);const Rs=R*SIZE,RHs=RH*SIZE;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
   // Desktop walking controls: WASD moves relative to the direction you're looking.
   const forward=(key.KeyW?1:0)-(key.KeyS?1:0);
   const strafe=(key.KeyD?1:0)-(key.KeyA?1:0);
   if(forward||strafe){
     const mag=Math.hypot(forward,strafe);
-    const speed=5.5*dt/mag;
+    const speed=5.5*SIZE*dt/mag;
     P.pos.x+=(-Math.sin(P.yaw)*forward+Math.cos(P.yaw)*strafe)*speed;
     P.pos.z+=(-Math.cos(P.yaw)*forward-Math.sin(P.yaw)*strafe)*speed;
   }
@@ -425,25 +428,25 @@ function stepPlayer(dt){
   for(let k=0;k<2;k++)if(!act[k]&&!P.touch[k]){P.a[k]+=(0-P.a[k])*Math.min(1,6*dt);P.b[k]+=(0.15-P.b[k])*Math.min(1,6*dt)}
   disp.set(0,0,0);let touching=false;const off=[V(),V()],ow=[V(),V()];
   for(let k=0;k<2;k++){
-    armOffset(P.g,k,P.a[k],P.b[k],off[k]);ow[k].copy(off[k]).applyQuaternion(gq);
-    _p.copy(P.prev[k]).applyQuaternion(gq);_dl.subVectors(ow[k],_p);
+    armOffset(P.g,k,P.a[k],P.b[k],off[k]);ow[k].copy(off[k]).applyQuaternion(gq).multiplyScalar(SIZE);
+    _p.copy(P.prev[k]).applyQuaternion(gq).multiplyScalar(SIZE);_dl.subVectors(ow[k],_p);
     const wx=P.pos.x+ow[k].x,wy=P.pos.y+ow[k].y,wz=P.pos.z+ow[k].z,h=hgt(wx,wz);
-    if(wy-RH<h+0.03){disp.sub(_dl);touching=true;P.touch[k]=true}else P.touch[k]=false;
+    if(wy-RHs<h+0.03){disp.sub(_dl);touching=true;P.touch[k]=true}else P.touch[k]=false;
     P.prev[k].copy(off[k]);
   }
   if(touching){
     P.pos.add(disp);
-    for(let k=0;k<2;k++)if(P.touch[k]){const wy=P.pos.y+ow[k].y,h=hgt(P.pos.x+ow[k].x,P.pos.z+ow[k].z);if(wy-RH<h)P.pos.y+=h+RH-wy}
+    for(let k=0;k<2;k++)if(P.touch[k]){const wy=P.pos.y+ow[k].y,h=hgt(P.pos.x+ow[k].x,P.pos.z+ow[k].z);if(wy-RHs<h)P.pos.y+=h+RHs-wy}
     P.hist.push(disp.clone().divideScalar(dt));if(P.hist.length>5)P.hist.shift();
     P.vel.set(0,0,0);P.hist.forEach(v=>P.vel.add(v));P.vel.divideScalar(P.hist.length);
-    if(P.vel.length()>MAXV)P.vel.setLength(MAXV);
+    if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE));
   }else{
-    if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>MAXV)P.vel.setLength(MAXV)}
-    P.hist=[];P.vel.y-=GRAV*dt;P.pos.addScaledVector(P.vel,dt);
+    if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE))}
+    P.hist=[];P.vel.y-=GRAV*SIZE*dt;P.pos.addScaledVector(P.vel,dt);
   }
   P.was=touching;
   const h=hgt(P.pos.x,P.pos.z);
-  if(P.pos.y-R<h){P.pos.y=h+R;if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
+  if(P.pos.y-Rs<h){P.pos.y=h+Rs;if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
   if(Math.abs(P.pos.x)>68){P.pos.x=Math.sign(P.pos.x)*68;P.vel.x=0}
   if(Math.abs(P.pos.z)>68){P.pos.z=Math.sign(P.pos.z)*68;P.vel.z=0}
   P.g.group.position.copy(P.pos);P.g.group.updateMatrixWorld(true);
@@ -459,7 +462,7 @@ function setHead(sc){P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.rep
   c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null});
   c.addEventListener('disconnected',()=>{for(let k=0;k<2;k++)if(byHand[k]&&byHand[k].grip===grips[i]){byHand[k]=null;vrPrev[k]=null}})});
 renderer.xr.addEventListener('sessionstart',()=>{rig.scale.setScalar(VS);rig.position.set(P.pos.x,hgt(P.pos.x,P.pos.z)+0.5,P.pos.z);
-  P.vel.set(0,0,0);P.hist=[];setHead(1);headS=1;tpOff.set(0,0,0);vrInit=true;$('help').style.display='none'});
+  P.vel.set(0,0,0);P.hist=[];P.g.group.scale.setScalar(1);setHead(1);headS=1;tpOff.set(0,0,0);vrInit=true;$('help').style.display='none'});
 renderer.xr.addEventListener('sessionend',()=>{rig.scale.setScalar(1);rig.position.set(0,0,0);rig.rotation.set(0,0,0);
   setHead(1);tpOff.set(0,0,0);[0,1].forEach(k=>P.g.rig.upper[k].scale.set(1,1,1));reset();if(!locked)$('help').style.display='flex'});
 const _hd=V();
@@ -605,9 +608,9 @@ renderer.setAnimationLoop(()=>{
   furTick(t);stepRemotes(dt);netTick(dt);voiceTick();vrMenuTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
-  else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
+  else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2*SIZE).add(V(0,1.4*SIZE,0));cam.lookAt(P.pos)}
   else{cam.position.copy(P.g.group.localToWorld(V(0,0.5,0.28)));cam.rotation.set(P.pitch,P.yaw,0,'YXZ')}
-  $('sub').textContent=`Speed: ${P.vel.length().toFixed(1)} m/s`;
+  $('sub').textContent=(SIZE!==1?`Size: ${SIZE}x   `:'')+`Speed: ${P.vel.length().toFixed(1)} m/s`;
   renderer.render(scene,cam);
 });
 </script></body></html>
