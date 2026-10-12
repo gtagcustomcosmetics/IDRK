@@ -403,6 +403,8 @@ renderer.xr.addEventListener('sessionstart',()=>{rig.scale.setScalar(VS);rig.pos
 renderer.xr.addEventListener('sessionend',()=>{rig.scale.setScalar(1);rig.position.set(0,0,0);rig.rotation.set(0,0,0);
   setHead(1);tpOff.set(0,0,0);[0,1].forEach(k=>P.g.rig.upper[k].scale.set(1,1,1));reset();if(!locked)$('help').style.display='flex'});
 const _hd=V();
+// Track headset pitch on the avatar's head bone without tilting the torso.
+const _headBaseQ=P.g.rig.head.quaternion.clone(),_headWorldQ=new THREE.Quaternion(),_rigWorldQ=new THREE.Quaternion(),_headLocalQ=new THREE.Quaternion(),_headPitchQ=new THREE.Quaternion(),_headPitchAxis=V(1,0,0);
 function stepVR(dt){
   rig.position.sub(tpOff);rig.updateMatrixWorld(true);const xc=renderer.xr.getCamera();
   const head=()=>rig.localToWorld(_hd.copy(xc.position));
@@ -435,9 +437,18 @@ function stepVR(dt){
   if(Math.abs(pn.x)>68){mv.x+=Math.sign(pn.x)*68-pn.x;P.vel.x=0}
   if(Math.abs(pn.z)>68){mv.z+=Math.sign(pn.z)*68-pn.z;P.vel.z=0}
   rig.position.add(mv);P.pos.copy(pb).add(mv);
-  const gg=P.g.group;vrYaw=_eu.setFromQuaternion(xc.quaternion,'YXZ').y;
+  const gg=P.g.group;
+  // Keep the body upright and facing the headset's yaw; apply looking up/down only to the head bone.
+  xc.getWorldQuaternion(_headWorldQ);
+  rig.getWorldQuaternion(_rigWorldQ);
+  _headLocalQ.copy(_rigWorldQ).invert().multiply(_headWorldQ);
+  _eu.setFromQuaternion(_headLocalQ,'YXZ');
+  const headPitch=Math.max(-1.0,Math.min(1.0,_eu.x));
+  vrYaw=_eu.y;
   _fw.set(-Math.sin(vrYaw),0,-Math.cos(vrYaw));_rt.set(Math.cos(vrYaw),0,-Math.sin(vrYaw));
-  gg.position.copy(P.pos).addScaledVector(_fw,-0.28);gg.rotation.y=vrYaw+PI;gg.updateMatrixWorld(true);
+  gg.position.copy(P.pos).addScaledVector(_fw,-0.28);gg.rotation.y=vrYaw+PI;
+  P.g.rig.head.quaternion.copy(_headBaseQ).multiply(_headPitchQ.setFromAxisAngle(_headPitchAxis,-headPitch));
+  gg.updateMatrixWorld(true);
   for(let k=0;k<2;k++)if(w[k]){
     _pole.set(0,-0.6,0).addScaledVector(_rt,k?0.6:-0.6).addScaledVector(_fw,-0.5);
     ik(P.g,k,w[k].add(mv),_pole);handRot(P.g,k,byHand[k].grip.getWorldQuaternion(_cq));
