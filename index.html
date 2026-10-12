@@ -19,6 +19,8 @@ canvas{display:block}
 #mp input{width:130px;padding:4px 6px;border-radius:6px;border:0;font-size:14px}
 #mp button{margin:3px 3px 3px 0;padding:5px 9px;border:0;border-radius:6px;background:#ffd54a;color:#000;cursor:pointer;font-size:13px}
 #mp #mpstat{color:#9fe3a0;font-size:13px}
+#mp #micbtn{margin-top:4px;padding:6px 10px;border:0;border-radius:6px;background:#fff3;color:#fff;cursor:pointer;font-size:13px}
+#mp #micbtn.on{background:#9fe3a0;color:#000}
 </style></head><body>
 <div id="hud"><div id="state"></div><div id="sub"></div></div>
 <div id="help"><div id="msg">Loading assets...</div></div>
@@ -223,7 +225,7 @@ const MAX_PLAYERS=4,PEEROPTS={},HOST_ID='lokeworks-monkegame-public-lobby';
 const remotes=new Map(),alias=new Map(),_tv=V();let netT=0;
 const key_=id=>alias.get(id)||id,fl=a=>a.map(v=>Math.round(v*100)/100);
 const mpEl=document.createElement('div');mpEl.id='mp';
-mpEl.innerHTML='<b>Public lobby</b><br>Your name <input id="mpname" maxlength="14"><div id="mpstat">Connecting...</div><small>Everyone plays in one public lobby (up to 4 players). Your name shows above your head.</small>';
+mpEl.innerHTML='<b>Public lobby</b><br>Your name <input id="mpname" maxlength="14"><div id="mpstat">Connecting...</div><small>Everyone plays in one public lobby (up to 4 players). Your name shows above your head.</small><br><button id="micbtn"></button>';
 $('help').appendChild(mpEl);['click','mousedown'].forEach(ev=>mpEl.addEventListener(ev,e=>e.stopPropagation()));
 try{$('mpname').value=localStorage.getItem('monkeName')||''}catch(e){}
 if(!$('mpname').value)$('mpname').value='Monke'+(100+Math.floor(Math.random()*900));
@@ -321,6 +323,64 @@ function netTick(dt){
   netSend({t:'s',p:fl([g.position.x,g.position.y,g.position.z]),r:Math.round(g.rotation.y*100)/100,h:fl([a.x,a.y,a.z,b.x,b.y,b.z])});
 }
 joinLobby();
+
+// ---------- voice chat: proximity audio over the same PeerJS connections ----------
+const VOICE_MAX_DIST=20; // world units; voices fade to silence at this distance
+let voiceOn=true,micOK=null,micStream=null; // micOK: null=asking, true=working, false=denied/unavailable
+const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+const outDest=audioCtx.createMediaStreamDestination(),outGain=audioCtx.createGain(),inMaster=audioCtx.createGain();
+outGain.connect(outDest);inMaster.connect(audioCtx.destination);
+const voiceCalls=new Map(); // peer id -> {call,gain,el}
+const resumeAudio=()=>{if(audioCtx.state!=='running')audioCtx.resume().catch(()=>{})};
+['pointerdown','click','keydown','touchstart'].forEach(ev=>addEventListener(ev,resumeAudio));
+renderer.xr.addEventListener('sessionstart',resumeAudio);
+function paintVoice(){const b=$('micbtn');b.textContent='\u{1F3A4} Voice: '+(voiceOn?(micOK===false?'On (no mic)':'On'):'Off');b.classList.toggle('on',voiceOn)}
+function getMic(){
+  if(micStream)return Promise.resolve(micStream);
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return Promise.reject(new Error('no mic'));
+  return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false})
+    .then(s=>{micStream=s;audioCtx.createMediaStreamSource(s).connect(outGain);return s});
+}
+// Voice On/Off disables BOTH directions: your mic is silenced and you stop hearing others
+function setVoice(on){
+  voiceOn=on;outGain.gain.value=on?1:0;inMaster.gain.value=on?1:0;
+  if(on&&!micStream)getMic().then(()=>{micOK=true;paintVoice()}).catch(()=>{micOK=false;paintVoice()});
+  paintVoice();
+}
+$('micbtn').addEventListener('click',()=>setVoice(!voiceOn));
+function wireVoice(id,call){
+  const old=voiceCalls.get(id);if(old&&old.call!==call){try{old.call.close()}catch(e){}}
+  const v={call,gain:null,el:null};voiceCalls.set(id,v);
+  call.on('stream',s=>{
+    if(v.gain)return;
+    v.el=new Audio();v.el.srcObject=s;v.el.muted=true;v.el.play().catch(()=>{}); // keeps the stream flowing in Chrome; real audio goes through WebAudio
+    v.gain=audioCtx.createGain();v.gain.gain.value=0;
+    audioCtx.createMediaStreamSource(s).connect(v.gain);v.gain.connect(inMaster);
+  });
+  const done=()=>{if(voiceCalls.get(id)===v)voiceCalls.delete(id);try{v.gain&&v.gain.disconnect()}catch(e){}};
+  call.on('close',done);call.on('error',done);
+}
+function voiceSync(){
+  if(!net||!net.peer)return;
+  if(!net.peer._vh){net.peer._vh=1;net.peer.on('call',call=>{call.answer(outDest.stream);wireVoice(key_(call.peer),call)})}
+  if(!net.peer.open)return;
+  net.conns.forEach((c,cid)=>{
+    const id=key_(cid);
+    if(!c.open||id===net.peer.id||voiceCalls.has(id)||!remotes.has(id))return;
+    if(net.peer.id<id){const call=net.peer.call(id,outDest.stream);if(call)wireVoice(id,call)} // lower id places the call, so there is only ever one per pair
+  });
+}
+setInterval(voiceSync,1000);
+function voiceTick(){
+  const now=audioCtx.currentTime;
+  voiceCalls.forEach((v,id)=>{
+    if(!v.gain)return;const r=remotes.get(id);
+    if(!r){v.gain.gain.setTargetAtTime(0,now,.08);return}
+    const k=Math.max(0,1-P.g.group.position.distanceTo(r.pos)/VOICE_MAX_DIST);
+    v.gain.gain.setTargetAtTime(k*k,now,.08);
+  });
+}
+setVoice(true);
 
 // ---------- input ----------
 const key={},btn={0:false,2:false};let locked=false,msgShown=false;
@@ -463,12 +523,74 @@ function stepVR(dt){
   else{tpOff.set(0,0,0);tpYaw=vrYaw}
   rig.position.add(tpOff);
 }
+// ---------- VR menu: left-controller menu button (or hold both grips ~0.5s) ----------
+const MW=512,MH=384,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
+const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
+const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
+menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
+const MBTN=[{id:'voice',x:40,y:110,w:432,h:90},{id:'close',x:40,y:230,w:432,h:90}];
+let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,gripHold=0;const mPrevTrig=[false,false];
+function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x+w,y+h,x,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
+function drawMenu(){
+  const key=menuHover+'|'+voiceOn+'|'+micOK;if(key===menuDrawKey)return;menuDrawKey=key;
+  const x=menuCx;x.clearRect(0,0,MW,MH);
+  x.fillStyle='rgba(0,0,0,.82)';rr(0,0,MW,MH,28);x.fill();
+  x.fillStyle='#fff';x.font='bold 44px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,74);
+  MBTN.forEach((b,i)=>{
+    let col='#555',txt='Close menu',fg='#fff';
+    if(b.id==='voice'){col=voiceOn?'#3ecf6a':'#d9534f';fg=voiceOn?'#000':'#fff';txt='Voice chat: '+(voiceOn?(micOK===false?'ON (no mic)':'ON'):'OFF')}
+    x.fillStyle=col;rr(b.x,b.y,b.w,b.h,18);x.fill();
+    if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=7;rr(b.x,b.y,b.w,b.h,18);x.stroke()}
+    x.fillStyle=fg;x.font='bold 36px system-ui,sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+13);
+  });
+  x.fillStyle='#aaa';x.font='22px system-ui,sans-serif';x.fillText('Point and pull the trigger',MW/2,356);
+  menuTex.needsUpdate=true;
+}
+const ctrls=[0,1].map(i=>renderer.xr.getController(i));
+const lasers=ctrls.map(c=>{const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(),V(0,0,-1)]),new THREE.LineBasicMaterial({color:0xffd54a,fog:false}));l.visible=false;c.add(l);return l});
+const _rc=new THREE.Raycaster(),_mo=V(),_md=V(),_mq=new THREE.Quaternion();
+function setMenu(on){
+  if(on===menuOpen)return;menuOpen=on;menuG.visible=on;lasers.forEach(l=>l.visible=on);
+  if(!on)return;
+  const xc=renderer.xr.getCamera();rig.localToWorld(_mo.copy(xc.position));xc.getWorldQuaternion(_mq);
+  _md.set(0,0,-1).applyQuaternion(_mq);_md.y=0;if(_md.lengthSq()<1e-4)_md.set(0,0,-1);_md.normalize();
+  menuG.position.copy(_mo).addScaledVector(_md,1);menuG.position.y=_mo.y-0.05;
+  menuG.lookAt(_mo.x,menuG.position.y,_mo.z);menuG.updateMatrixWorld(true);
+  menuHover=-1;menuDrawKey='';drawMenu();
+}
+const pulse=gp=>{try{const a=gp&&gp.hapticActuators&&gp.hapticActuators[0];if(a&&a.pulse)a.pulse(0.4,40)}catch(e){}};
+function menuClick(id){if(id==='voice')setVoice(!voiceOn);else if(id==='close')setMenu(false)}
+function vrMenuTick(dt){
+  if(!renderer.xr.isPresenting){if(menuOpen)setMenu(false);return}
+  const gp0=byHand[0]&&byHand[0].gp,gp1=byHand[1]&&byHand[1].gp;
+  let mb=false;if(gp0)for(let i=6;i<gp0.buttons.length;i++)if(gp0.buttons[i].pressed)mb=true; // real menu button, if the browser exposes it
+  const both=!!(gp0&&gp1&&gp0.buttons[1]&&gp1.buttons[1]&&gp0.buttons[1].pressed&&gp1.buttons[1].pressed);
+  gripHold=both?gripHold+dt:0;
+  const req=mb||gripHold>0.5;if(req&&!mPrevReq)setMenu(!menuOpen);mPrevReq=req;
+  if(!menuOpen)return;
+  let hov=-1;
+  for(let i=0;i<2;i++){
+    const c=ctrls[i],hk=byHand[0]&&byHand[0].grip===grips[i]?0:(byHand[1]&&byHand[1].grip===grips[i]?1:-1);
+    const gp=hk>=0?byHand[hk].gp:null,tr=!!(gp&&gp.buttons[0]&&gp.buttons[0].pressed),press=tr&&!mPrevTrig[i];mPrevTrig[i]=tr;
+    c.updateMatrixWorld(true);_mo.setFromMatrixPosition(c.matrixWorld);_md.set(0,0,-1).transformDirection(c.matrixWorld);_rc.set(_mo,_md);
+    const h=_rc.intersectObject(menuMesh,false)[0];let len=2.5/rig.scale.x;
+    if(h){
+      len=h.distance/rig.scale.x;const px=h.uv.x*MW,py=(1-h.uv.y)*MH;
+      const bi=MBTN.findIndex(b=>px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h);
+      if(bi>=0){hov=bi;if(press){pulse(gp);menuClick(MBTN[bi].id);if(!menuOpen)return}}
+    }
+    lasers[i].scale.z=len;
+  }
+  menuHover=hov;drawMenu();
+}
+renderer.xr.addEventListener('sessionend',()=>setMenu(false));
+
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
   if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
   if(P.g.spin)P.g.spin.rotation.y+=dt*25;
-  furTick(t);stepRemotes(dt);netTick(dt);
+  furTick(t);stepRemotes(dt);netTick(dt);voiceTick();vrMenuTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
