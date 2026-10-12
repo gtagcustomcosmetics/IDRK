@@ -15,23 +15,25 @@ canvas{display:block}
 #cos button.on{background:#ffd54a;color:#000}
 #cos .sw{display:inline-block;width:22px;height:22px;border-radius:50%;margin:4px 3px;cursor:pointer;border:2px solid transparent}
 #cos .sw.on{border-color:#fff}
-#mp{position:fixed;left:10px;bottom:10px;z-index:5;max-width:290px;padding:9px 12px;border-radius:10px;background:#000b;color:#fff;font-size:13px;line-height:1.45;text-shadow:0 1px 3px #000;pointer-events:none}
-#mp strong{color:#ffd54a}
+#mp{position:fixed;left:16px;top:16px;max-width:230px;padding:14px;border-radius:12px;background:#000b;font-size:14px;text-align:left;cursor:default;line-height:1.7}
+#mp input{width:130px;padding:4px 6px;border-radius:6px;border:0;font-size:14px}
+#mp button{margin:3px 3px 3px 0;padding:5px 9px;border:0;border-radius:6px;background:#ffd54a;color:#000;cursor:pointer;font-size:13px}
+#mp #mpstat{color:#9fe3a0;font-size:13px}
 </style></head><body>
 <div id="hud"><div id="state"></div><div id="sub"></div></div>
-<div id="mp"><strong>Multiplayer:</strong> <span id="mpStatus">Setting up…</span><br><span id="mpPlayers">Players: 1/4</span></div>
 <div id="help"><div id="msg">Loading assets...</div></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
-import {createClient} from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 const $=id=>document.getElementById(id), V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z);
 const R=0.55, RH=0.1, GRAV=9.8, MAXV=12, SENS=0.005, LOOK=0.0025, PI=Math.PI;
+const FUR_MATCH=/fur/i; // name of the fur material in your .glb (if no material matches, the biggest mesh is tinted)
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
 document.body.prepend(renderer.domElement);
@@ -95,7 +97,8 @@ function hgt(x,z){
 function makeGorilla(){
   const group=new THREE.Group(),model=clone(playerGltf.scene);group.add(model);scene.add(group);
   const rig={upper:[],lower:[],wrist:[],sh:[],len:[],lu:[],ll:[]};
-  model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh)o.frustumCulled=false;
+  const meshes=[];
+  model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh){o.frustumCulled=false;o.material=o.material.clone();meshes.push(o)}
     const n=o.name.replace(/[\s_]/g,'');
     if(n.startsWith('UpperArmL'))rig.upper[0]=o;if(n.startsWith('UpperArmR'))rig.upper[1]=o;
     if(o.isBone&&/^Head/.test(n))rig.head=o;
@@ -103,7 +106,9 @@ function makeGorilla(){
     if(n.startsWith('WristL'))rig.wrist[0]=o;if(n.startsWith('WristR'))rig.wrist[1]=o;});
   group.updateMatrixWorld(true);
   for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w);const l=rig.lower[k].getWorldPosition(V());rig.lu[k]=s.distanceTo(l);rig.ll[k]=l.distanceTo(w)}
-  return {group,rig};
+  let fm=meshes.filter(o=>FUR_MATCH.test(o.material.name));
+  if(!fm.length)fm=[meshes.reduce((a,b)=>b.geometry.attributes.position.count>a.geometry.attributes.position.count?b:a)];
+  return {group,rig,furMats:fm.map(o=>o.material),fur:0xffffff};
 }
 const _S=V(),_W=V(),_C=V(),_D=V(),_q=new THREE.Quaternion(),_Qw=new THREE.Quaternion(),_Pq=new THREE.Quaternion();
 // arm direction in gorilla-local space: a = swing forward(+)/back(-), b = swing outward
@@ -135,14 +140,14 @@ function aimBone(b,c,tp){
   b.quaternion.copy(_Pq.invert().multiply(_q.multiply(_Qw)));
 }
 function ik(g,k,T,pole){
-  const r=g.rig,U=r.upper[k];U.scale.setScalar(1);g.group.updateMatrixWorld(true);
-  const S=U.getWorldPosition(V()),d=S.distanceTo(T),f=Math.min(1.5,Math.max(1,d/(r.lu[k]+r.ll[k]))),a=r.lu[k]*f,b=r.ll[k]*f;
+  const r=g.rig,U=r.upper[k];U.scale.set(1,1,1);g.group.updateMatrixWorld(true);
+  const S=U.getWorldPosition(V()),d=S.distanceTo(T),f=Math.min(1.7,Math.max(1,d/(r.lu[k]+r.ll[k]))),a=r.lu[k]*f,b=r.ll[k]*f;
   const dd=Math.min(Math.max(d,Math.abs(a-b)+1e-3),a+b-1e-3);
   _u.subVectors(T,S).normalize();
   const x=(a*a-b*b+dd*dd)/(2*dd),hh=Math.sqrt(Math.max(0,a*a-x*x));
   _ep.copy(pole).addScaledVector(_u,-pole.dot(_u));if(_ep.lengthSq()<1e-6)_ep.set(0,-1,0);_ep.normalize();
   const E=S.clone().addScaledVector(_u,x).addScaledVector(_ep,hh);
-  U.scale.setScalar(f);aimBone(U,r.lower[k],E);aimBone(r.lower[k],r.wrist[k],T);
+  U.scale.set(1,f,1);aimBone(U,r.lower[k],E);aimBone(r.lower[k],r.wrist[k],T);
 }
 // hand/wrist rotation follows the controller (tune HAND_TILT / HAND_ROLL if the hands look rotated wrong)
 const HAND_TILT=-0.5,HAND_ROLL=0;
@@ -153,7 +158,7 @@ function handRot(g,k,cq){
   wr.parent.getWorldQuaternion(_Pq);wr.quaternion.copy(_Pq.invert().multiply(_wq));
 }
 // ---------- player ----------
-const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],third:false,was:false,netHands:null};
+const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],hist:[],third:false,was:false};
 function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+R+0.2;P.vel.set(0,0,0);P.hist=[];
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
@@ -183,193 +188,150 @@ const hatDefs=[
  ['Cat Ears',m=>{const g=new THREE.Group();for(const sx of[-1,1]){const e=at(new THREE.Mesh(new THREE.ConeGeometry(.05,.11,4),m),sx*.09,.04,0);e.rotation.z=-sx*.25;
    const i=at(new THREE.Mesh(new THREE.ConeGeometry(.028,.07,4),MT(0xffb3c6)),sx*.09,.035,.012);i.rotation.z=-sx*.25;g.add(e,i)}return g}]
 ];
-const cos={hat:0,col:0};let hatObj=null,hatSpin=null;
-try{const sv=JSON.parse(localStorage.getItem('monkeCos')||'{}');if(sv.hat>=0&&sv.hat<hatDefs.length)cos.hat=sv.hat|0;if(sv.col>=0&&sv.col<COLS.length)cos.col=sv.col|0}catch(e){}
+function setHat(g,hi,ci){
+  if(g.hatObj){g.rig.head.remove(g.hatObj);g.hatObj=null;g.spin=null}
+  if(hatDefs[hi]&&hatDefs[hi][1]){g.hatObj=hatDefs[hi][1](MT(COLS[ci]));g.spin=g.hatObj.userData.spin||null;at(g.hatObj,0,0.285,0.03);g.rig.head.add(g.hatObj)}
+}
+function setFur(g,v){g.fur=v;if(v>=0)g.furMats.forEach(m=>m.color.setHex(v))}
+function rainbow(g,t){g.furMats.forEach(m=>m.color.setHSL((t*0.12)%1,0.85,0.55))}
+function furTick(t){if(P.g.fur===-1)rainbow(P.g,t);remotes.forEach(r=>{if(r.g.fur===-1)rainbow(r.g,t)})}
+const cos={hat:0,col:0,fur:0xffffff};let net=null;
+try{const sv=JSON.parse(localStorage.getItem('monkeCos')||'{}');if(sv.hat>=0&&sv.hat<hatDefs.length)cos.hat=sv.hat|0;if(sv.col>=0&&sv.col<COLS.length)cos.col=sv.col|0;if(typeof sv.fur==='number')cos.fur=sv.fur}catch(e){}
 const cosEl=document.createElement('div');cosEl.id='cos';
-cosEl.innerHTML='<b>Wardrobe</b><div id="hl"></div><div id="cl"></div><small>In game: <b>H</b> next hat, <b>C</b> next color.<br>Check yourself in the mirror!<br>Click outside this box to play.</small>';
+cosEl.innerHTML='<b>Wardrobe</b><div id="hl"></div><div id="cl"></div><b>Fur color</b><div id="fl"></div><small>In game: <b>H</b> hat, <b>C</b> hat color, <b>F</b> fur color.<br>Check yourself in the mirror!<br>Click outside this box to play.</small>';
 $('help').appendChild(cosEl);['click','mousedown'].forEach(ev=>cosEl.addEventListener(ev,e=>e.stopPropagation()));
 hatDefs.forEach((h,i)=>{const b=document.createElement('button');b.textContent=h[0];b.onclick=()=>{cos.hat=i;wearHat()};$('hl').appendChild(b)});
 COLS.forEach((c,i)=>{const d=document.createElement('span');d.className='sw';d.style.background='#'+c.toString(16).padStart(6,'0');d.onclick=()=>{cos.col=i;wearHat()};$('cl').appendChild(d)});
+const FURS=[0xffffff,0xe8742a,0xd62f2f,0xff7eb6,0x9b59b6,0x3b7ddd,0x25c4e8,0x2ecc71,0xb6e63a,0xf6d32d,0x8a5a2b,0x2b2b2b,-1];
+FURS.forEach(v=>{const d=document.createElement('span');d.className='sw';d.dataset.v=v;d.title=v===0xffffff?'Original':v<0?'Rainbow':'';
+  d.style.background=v<0?'conic-gradient(red,yellow,lime,cyan,blue,magenta,red)':'#'+v.toString(16).padStart(6,'0');d.onclick=()=>{cos.fur=v;wearHat()};$('fl').appendChild(d)});
+const fp=document.createElement('input');fp.type='color';fp.value='#ff8800';fp.title='Custom fur color';fp.style.cssText='width:30px;height:26px;border:0;padding:0;vertical-align:middle;background:none';
+fp.oninput=()=>{cos.fur=parseInt(fp.value.slice(1),16);wearHat()};$('fl').appendChild(fp);
 function wearHat(){
-  if(hatObj){P.g.rig.head.remove(hatObj);hatObj=null;hatSpin=null}
-  if(hatDefs[cos.hat][1]){hatObj=hatDefs[cos.hat][1](MT(COLS[cos.col]));hatSpin=hatObj.userData.spin||null;at(hatObj,0,0.285,0.03);P.g.rig.head.add(hatObj)}
+  setHat(P.g,cos.hat,cos.col);setFur(P.g,cos.fur);netSend({t:'c',hat:cos.hat,col:cos.col,fur:cos.fur});
   [...$('hl').children].forEach((b,i)=>b.classList.toggle('on',i===cos.hat));
   [...$('cl').children].forEach((d,i)=>d.classList.toggle('on',i===cos.col));
+  [...$('fl').children].forEach(d=>{if(d.dataset.v!==undefined)d.classList.toggle('on',+d.dataset.v===cos.fur)});
   try{localStorage.setItem('monkeCos',JSON.stringify(cos))}catch(e){}
 }
+const cycleFur=()=>{cos.fur=FURS[(FURS.indexOf(cos.fur)+1)%FURS.length];wearHat()};
 const cycleHat=d=>{cos.hat=(cos.hat+d+hatDefs.length)%hatDefs.length;wearHat()},cycleCol=d=>{cos.col=(cos.col+d+COLS.length)%COLS.length;wearHat()};
 wearHat();
 
-// ---------- public multiplayer (Supabase Realtime) ----------
-// Create a Supabase project, then paste its Project URL and publishable key here.
-// NEVER put a secret/service_role key in a browser game.
-const SUPABASE_URL='YOUR_SUPABASE_PROJECT_URL';
-const SUPABASE_KEY='YOUR_SUPABASE_PUBLISHABLE_KEY';
-const ROOM_COUNT=20, ROOM_CAPACITY=4, SEND_RATE_MS=66;
-const playerId=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():('p'+Math.random().toString(36).slice(2)+Date.now().toString(36));
-const playerName='Monke-'+playerId.slice(0,4).toUpperCase();
-let supabaseClient=null,mpChannel=null,mpRoom='',mpReady=false,mpJoining=false,lastSend=0;
-const roomProbes=[],remotePlayers=new Map();
-const mpStatus=(s)=>{ $('mpStatus').textContent=s; };
-function presencePlayers(ch){
-  const state=ch.presenceState();
-  return Object.values(state).flat().filter(p=>p&&p.playerId);
+// ---------- multiplayer: ONE public lobby, WebRTC peer-to-peer via PeerJS ----------
+const MAX_PLAYERS=4,PEEROPTS={},HOST_ID='lokeworks-monkegame-public-lobby';
+const remotes=new Map(),alias=new Map(),_tv=V();let netT=0;
+const key_=id=>alias.get(id)||id,fl=a=>a.map(v=>Math.round(v*100)/100);
+const mpEl=document.createElement('div');mpEl.id='mp';
+mpEl.innerHTML='<b>Public lobby</b><br>Your name <input id="mpname" maxlength="14"><div id="mpstat">Connecting...</div><small>Everyone plays in one public lobby (up to 4 players). Your name shows above your head.</small>';
+$('help').appendChild(mpEl);['click','mousedown'].forEach(ev=>mpEl.addEventListener(ev,e=>e.stopPropagation()));
+try{$('mpname').value=localStorage.getItem('monkeName')||''}catch(e){}
+if(!$('mpname').value)$('mpname').value='Monke'+(100+Math.floor(Math.random()*900));
+const setStat=t=>$('mpstat').textContent=t,myName=()=>($('mpname').value||'Monke').trim().slice(0,14)||'Monke';
+const updCount=()=>{if(net)setStat(`Public lobby: ${remotes.size+1}/${MAX_PLAYERS} players online`)};
+function mkTag(txt){
+  const c=document.createElement('canvas');c.width=256;c.height=64;const x=c.getContext('2d');
+  x.fillStyle='#0009';x.fillRect(0,8,256,48);x.fillStyle='#fff';x.font='bold 34px sans-serif';x.textAlign='center';x.fillText(txt,128,45);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));sp.scale.set(.8,.2,1);sp.renderOrder=5;sp.position.set(0,1.05,0);return sp;
 }
-function netState(){
-  return {
-    playerId, name:playerName,
-    pos:[P.pos.x,P.pos.y,P.pos.z], yaw:P.yaw, pitch:P.pitch,
-    a:P.a.slice(), b:P.b.slice(),
-    hands:P.netHands ? P.netHands.map(v=>v&&v.slice()) : null,
-    hat:cos.hat, col:cos.col, third:!!P.third,
-    sentAt:Date.now()
-  };
-}
-function updatePlayerCount(){
-  if(!mpChannel){ $('mpPlayers').textContent='Players: 1/4'; return; }
-  const count=Math.min(ROOM_CAPACITY,Math.max(1,presencePlayers(mpChannel).length));
-  $('mpPlayers').textContent=`Players: ${count}/${ROOM_CAPACITY}${mpRoom?' · '+mpRoom.replace('monke-public-','Room '):''}`;
-}
-function createRemote(state){
-  if(!state||!state.playerId||state.playerId===playerId)return null;
-  let r=remotePlayers.get(state.playerId);
-  if(!r){
-    const g=makeGorilla();
-    r={id:state.playerId,g,targetPos:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],hands:null,hat:-1,col:-1,hatObj:null,hatSpin:null};
-    r.targetPos.set(0,hgt(0,0)+R+0.2,0);
-    remotePlayers.set(r.id,r);
-  }
-  applyRemoteState(state);
+P.tag=mkTag(myName());P.g.group.add(P.tag);
+$('mpname').addEventListener('input',()=>{P.g.group.remove(P.tag);P.tag=mkTag(myName());P.g.group.add(P.tag);
+  try{localStorage.setItem('monkeName',myName())}catch(e){}netSend({t:'n',name:myName()})});
+function addRemote(id,name,hat,col,fur){
+  let r=remotes.get(id);
+  if(!r){const g=makeGorilla();r={g,tag:null,pos:V(),ry:0,h:[V(),V()],tp:null,name:'',last:performance.now()};remotes.set(id,r);name=name||'Monke';updCount()}
+  if(name&&name!==r.name){if(r.tag)r.g.group.remove(r.tag);r.tag=mkTag(name);r.g.group.add(r.tag);r.name=name}
+  if(hat!==undefined)setHat(r.g,hat,col);
+  if(fur!==undefined)setFur(r.g,fur);
   return r;
 }
-function applyRemoteState(s){
-  if(!s||!s.playerId||s.playerId===playerId||!Array.isArray(s.pos))return;
-  let r=remotePlayers.get(s.playerId);
-  if(!r){
-    const g=makeGorilla();
-    r={id:s.playerId,g,targetPos:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],hands:null,hat:-1,col:-1,hatObj:null,hatSpin:null};
-    remotePlayers.set(r.id,r);
-  }
-  r.targetPos.set(Number(s.pos[0])||0,Number(s.pos[1])||0,Number(s.pos[2])||0);
-  r.yaw=Number(s.yaw)||0; r.pitch=Number(s.pitch)||0;
-  if(Array.isArray(s.a))r.a=s.a.slice(0,2).map(n=>Number(n)||0);
-  if(Array.isArray(s.b))r.b=s.b.slice(0,2).map(n=>Number(n)||0);
-  r.hands=Array.isArray(s.hands)?s.hands:null;
-  if(Number.isInteger(s.hat)&&Number.isInteger(s.col)&&(r.hat!==s.hat||r.col!==s.col)){
-    r.hat=s.hat; r.col=s.col;
-    if(r.hatObj&&r.g.rig.head)r.g.rig.head.remove(r.hatObj);
-    r.hatObj=null;r.hatSpin=null;
-    const def=hatDefs[Math.max(0,Math.min(hatDefs.length-1,r.hat))];
-    if(def&&def[1]&&r.g.rig.head){
-      r.hatObj=def[1](MT(COLS[(r.col+COLS.length)%COLS.length]));
-      r.hatSpin=r.hatObj.userData.spin||null;
-      at(r.hatObj,0,0.285,0.03);r.g.rig.head.add(r.hatObj);
-    }
-  }
+function dropRemote(id){const r=remotes.get(id);if(!r)return;scene.remove(r.g.group);remotes.delete(id);updCount()}
+function netSend(m){if(net)net.conns.forEach(c=>{if(c.open)c.send(m)})}
+function onData(id0,d){
+  if(!d)return;if(d.t==='hi'&&d.id&&d.id!==id0)alias.set(id0,d.id);const id=key_(id0);const rr=remotes.get(id);if(rr)rr.last=performance.now();
+  if(d.t==='hi'){addRemote(id,d.name,d.hat,d.col,d.fur).seq=d.seq===undefined?9999:d.seq}
+  else if(d.t==='q'){const r=remotes.get(id);if(r)r.seq=d.seq}
+  else if(d.t==='c')addRemote(id,undefined,d.hat,d.col,d.fur);
+  else if(d.t==='n')addRemote(id,d.name);
+  else if(d.t==='host'){if(net)net.hostKnown=true}
+  else if(d.t==='full'&&net&&!net.host){const p=net.peer;net=null;try{p.destroy()}catch(e){}[...remotes.keys()].forEach(dropRemote);
+    setStat(`Lobby is full (${MAX_PLAYERS}/${MAX_PLAYERS}). Waiting for a free spot...`);setTimeout(joinLobby,5000)}
+  else if(d.t==='s'){const r=addRemote(id);if(!r.tp){r.pos.set(d.p[0],d.p[1],d.p[2]);r.ry=d.r;r.h[0].set(d.h[0],d.h[1],d.h[2]);r.h[1].set(d.h[3],d.h[4],d.h[5])}r.tp=d}
+  else if(d.t==='peers'&&net){if(d.seq!==undefined&&net.seq===9999){net.seq=d.seq;netSend({t:'q',seq:d.seq})}d.ids.forEach(connectTo)}
 }
-function removeRemote(id){
-  const r=remotePlayers.get(id); if(!r)return;
-  scene.remove(r.g.group);remotePlayers.delete(id);
+function wire(c){
+  const id=c.peer;const old=net.conns.get(id);if(old&&old!==c){try{old.close()}catch(e){}}net.conns.set(id,c);
+  c.on('open',()=>{
+    if(net&&net.host&&[...net.conns.values()].filter(x=>x.open&&x!==c).length+1>=MAX_PLAYERS){   // lobby full: turn the newcomer away
+      c.rejected=true;if(net.conns.get(id)===c)net.conns.delete(id);c.send({t:'full'});setTimeout(()=>{try{c.close()}catch(e){}},500);return}
+    c.send({t:'hi',id:net.peer.id,seq:net.seq,name:myName(),hat:cos.hat,col:cos.col,fur:cos.fur});
+    if(net&&net.host)c.send({t:'peers',seq:net.n++,ids:[...net.conns.keys()].filter(k=>k!==id&&net.conns.get(k).open)})});
+  c.on('data',d=>{if(!c.rejected)onData(id,d)});
+  c.on('close',()=>{
+    if(net&&net.conns.get(id)===c)net.conns.delete(id);
+    if(!net||![...net.conns.keys()].some(k=>key_(k)===key_(id)))dropRemote(key_(id));
+    if(net&&!net.host&&id===HOST_ID)claimHost();
+  });
+  c.on('error',()=>{});
 }
-function roomSync(ch){
-  if(ch!==mpChannel)return;
-  const state=ch.presenceState(),seen=new Set();
-  for(const list of Object.values(state)){
-    for(const p of list||[]){
-      if(!p||!p.playerId||p.playerId===playerId)continue;
-      seen.add(p.playerId);createRemote(p);
-    }
-  }
-  for(const id of [...remotePlayers.keys()])if(!seen.has(id))removeRemote(id);
-  updatePlayerCount();
-  // Resolve near-simultaneous joins deterministically if a room briefly exceeds four.
-  const ids=Object.keys(state).sort();
-  if(ids.length>ROOM_CAPACITY&&!ids.slice(0,ROOM_CAPACITY).includes(playerId)){
-    mpStatus('Room full, finding another…');
-    leaveCurrentRoom().then(()=>joinPublicRoom());
-  }
+function connectTo(id){if(!net||id===net.peer.id||net.conns.has(id))return;wire(net.peer.connect(id,{reliable:true}))}
+// if the lobby host leaves, the player who joined next (lowest join number) takes over the lobby so new people can still join
+function claimHost(){
+  const hk=key_(HOST_ID),rank=[...remotes].filter(([k,r])=>k!==hk&&(r.seq===undefined?9999:r.seq)<net.seq).length;
+  net.hostKnown=false;
+  setTimeout(()=>{
+    if(!net||net.host||net.hostKnown||net.conns.has(HOST_ID))return;
+    const hp=new Peer(HOST_ID,PEEROPTS);
+    hp.on('open',()=>{if(!net){hp.destroy();return}net.host=true;net.hostPeer=hp;
+      net.n=Math.max(net.seq,...[...remotes.values()].map(r=>r.seq===undefined||r.seq===9999?0:r.seq))+1;hp.on('connection',wire);updCount();netSend({t:'host'})});
+    hp.on('error',e=>{if(e.type==='unavailable-id'){hp.destroy();setTimeout(()=>{if(net&&!net.host&&!net.hostKnown)connectTo(HOST_ID)},1500)}});
+  },rank===0?300:1500+rank*1500);
 }
-async function leaveCurrentRoom(){
-  mpReady=false;
-  const old=mpChannel;mpChannel=null;mpRoom='';
-  if(old){try{await old.untrack()}catch(e){};try{await supabaseClient.removeChannel(old)}catch(e){}}
-  for(const id of [...remotePlayers.keys()])removeRemote(id);
-  updatePlayerCount();
+function joinLobby(){
+  if(!window.Peer){setStat('Multiplayer library failed to load');return}
+  setStat('Connecting...');
+  const p=new Peer(HOST_ID,PEEROPTS);
+  p.on('open',()=>{net={peer:p,conns:new Map(),host:true,seq:0,n:1};p.on('connection',wire);updCount()});
+  p.on('error',e=>{
+    if(e.type==='unavailable-id'){
+      p.destroy();const g=new Peer(undefined,PEEROPTS);
+      g.on('open',()=>{net={peer:g,conns:new Map(),host:false,seq:9999,n:0};g.on('connection',wire);connectTo(HOST_ID);updCount()});
+      g.on('error',e2=>{
+        if(e2.type==='peer-unavailable'){g.destroy();net=null;setStat('Looking for the lobby...');setTimeout(joinLobby,2000+Math.random()*2000)}
+        else setStat('Network error: '+e2.type)});
+    }else setStat('Network error: '+e.type);
+  });
 }
-async function joinPublicRoom(){
-  if(mpJoining||mpReady||!supabaseClient)return;
-  mpJoining=true;mpStatus('Finding a public room…');
-  try{
-    // Probe several public rooms. Presence is used for matchmaking; Broadcast carries movement.
-    const probes=[];
-    for(let i=1;i<=ROOM_COUNT;i++){
-      const ch=supabaseClient.channel(`monke-public-${String(i).padStart(2,'0')}`,{
-        config:{presence:{key:playerId},broadcast:{self:false}}
-      });
-      ch.on('presence',{event:'sync'},()=>roomSync(ch));
-      ch.on('presence',{event:'join'},()=>roomSync(ch));
-      ch.on('presence',{event:'leave'},()=>roomSync(ch));
-      ch.on('broadcast',{event:'player-state'},({payload})=>{
-        if(ch===mpChannel&&payload&&payload.playerId!==playerId)applyRemoteState(payload);
-      });
-      probes.push({ch,topic:`monke-public-${String(i).padStart(2,'0')}`});
-    }
-    const results=await Promise.all(probes.map(({ch})=>new Promise(resolve=>{
-      let settled=false;
-      const finish=v=>{if(!settled){settled=true;resolve(v)}};
-      ch.subscribe(status=>{if(status==='SUBSCRIBED')finish(true);else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED')finish(false)});
-      setTimeout(()=>finish(false),9000);
-    })));
-    await new Promise(r=>setTimeout(r,650));
-    let chosen=null;
-    for(let i=0;i<probes.length;i++){
-      if(results[i]&&Object.keys(probes[i].ch.presenceState()).length<ROOM_CAPACITY){chosen=probes[i];break;}
-    }
-    if(!chosen){
-      await Promise.all(probes.map(({ch})=>supabaseClient.removeChannel(ch)));
-      mpStatus('All public rooms busy. Refresh to retry.');
-      return;
-    }
-    mpChannel=chosen.ch;mpRoom=chosen.topic;
-    // Stop probing rooms we did not join.
-    await Promise.all(probes.filter(p=>p!==chosen).map(({ch})=>supabaseClient.removeChannel(ch)));
-    await mpChannel.track(netState());
-    mpReady=true;mpStatus('Connected to public multiplayer');
-    roomSync(mpChannel);
-    updatePlayerCount();
-  }catch(err){
-    console.error('Multiplayer connection failed:',err);
-    mpStatus('Connection failed. Check setup.');
-  }finally{mpJoining=false;}
+function stepRemotes(dt){
+  const k=Math.min(1,12*dt);
+  remotes.forEach(r=>{const d=r.tp;if(!d)return;
+    r.pos.lerp(_tv.set(d.p[0],d.p[1],d.p[2]),k);r.ry+=Math.atan2(Math.sin(d.r-r.ry),Math.cos(d.r-r.ry))*k;
+    r.g.group.position.copy(r.pos);r.g.group.rotation.y=r.ry;r.g.group.updateMatrixWorld(true);
+    const yaw=r.ry-PI;_fw.set(-Math.sin(yaw),0,-Math.cos(yaw));_rt.set(Math.cos(yaw),0,-Math.sin(yaw));
+    for(let i=0;i<2;i++){r.h[i].lerp(_tv.set(d.h[i*3],d.h[i*3+1],d.h[i*3+2]),k);
+      _pole.set(0,-.6,0).addScaledVector(_rt,i?.6:-.6).addScaledVector(_fw,-.5);ik(r.g,i,r.h[i],_pole)}
+    if(r.g.spin)r.g.spin.rotation.y+=dt*25});
 }
-if(SUPABASE_URL.startsWith('https://')&&!SUPABASE_URL.includes('YOUR_')&&SUPABASE_KEY&&!SUPABASE_KEY.includes('YOUR_')){
-  try{
-    supabaseClient=createClient(SUPABASE_URL,SUPABASE_KEY);
-    joinPublicRoom();
-  }catch(e){console.error(e);mpStatus('Supabase config error');}
-}else{
-  mpStatus('Setup needed (see instructions)');
+function netTick(dt){
+  if(!net)return;
+  const now=performance.now();   // drop players who went silent (closed tab, lost connection) after 8 seconds
+  remotes.forEach((r,id)=>{if(now-r.last>8000){net.conns.forEach((c,k)=>{if(key_(k)===id){try{c.close()}catch(e){}net.conns.delete(k);if(k===HOST_ID&&!net.host)claimHost()}});dropRemote(id)}});
+  netT-=dt;if(netT>0||!net.conns.size)return;netT=1/15;
+  const g=P.g.group,a=P.g.rig.wrist[0].getWorldPosition(V()),b=P.g.rig.wrist[1].getWorldPosition(V());
+  netSend({t:'s',p:fl([g.position.x,g.position.y,g.position.z]),r:Math.round(g.rotation.y*100)/100,h:fl([a.x,a.y,a.z,b.x,b.y,b.z])});
 }
-addEventListener('beforeunload',()=>{if(mpChannel){try{mpChannel.untrack()}catch(e){}}});
-setInterval(async()=>{
-  if(!mpReady||!mpChannel)return;
-  try{
-    await mpChannel.send({type:'broadcast',event:'player-state',payload:netState()});
-    // Refresh presence slowly, not every movement packet.
-    if(Date.now()-lastSend>5000){lastSend=Date.now();await mpChannel.track({playerId,name:playerName,hat:cos.hat,col:cos.col,pos:[P.pos.x,P.pos.y,P.pos.z],yaw:P.yaw,pitch:P.pitch,a:P.a.slice(),b:P.b.slice(),hands:P.netHands});}
-  }catch(e){console.warn('Multiplayer send failed:',e);}
-},SEND_RATE_MS);
+joinLobby();
 
 // ---------- input ----------
 const key={},btn={0:false,2:false};let locked=false,msgShown=false;
-addEventListener('keydown',e=>{key[e.code]=true;if(e.code==='KeyV'||e.code==='KeyP')P.third=!P.third;if(e.code==='KeyH')cycleHat(1);if(e.code==='KeyC')cycleCol(1);if(e.code.startsWith('Arrow'))e.preventDefault();if(e.code==='KeyR')reset()});
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;key[e.code]=true;if(e.code==='KeyV'||e.code==='KeyP')P.third=!P.third;if(e.code==='KeyH')cycleHat(1);if(e.code==='KeyC')cycleCol(1);if(e.code==='KeyF')cycleFur();if(e.code.startsWith('Arrow'))e.preventDefault();if(e.code==='KeyR')reset()});
 addEventListener('keyup',e=>key[e.code]=false);
 addEventListener('contextmenu',e=>e.preventDefault());
 addEventListener('mousedown',e=>{btn[e.button]=true;if(!locked)renderer.domElement.requestPointerLock()});
 addEventListener('mouseup',e=>btn[e.button]=false);
 $('help').addEventListener('click',()=>renderer.domElement.requestPointerLock());
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===renderer.domElement;$('help').style.display=locked?'none':'flex'});
-$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look. A mirror stands in front of you.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Right A/B respawns, <b>click right thumbstick</b> = third person, <b>click left thumbstick</b> = next hat, left X/Y = hat color.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
+$('msg').innerHTML='<b>MONKE TAG</b> (fan game)<br>Click to play. Move the mouse to look. A mirror stands in front of you.<br>Hold <b>Left Click / Q</b> = control LEFT arm<br>Hold <b>Right Click / E</b> = control RIGHT arm (hold both for both)<br>While holding, move the mouse to swing the arm.<br>Plant your hands on the ground and <b>pull back</b> to launch yourself!<br><b>VR:</b> open this page in your headset browser (Quest etc.) and tap <b>ENTER VR</b>. You are the gorilla: your head is its head and your controllers move its arms: push off the ground and pull back to launch! Right A/B respawns, <b>click right thumbstick</b> = third person, <b>click left thumbstick</b> = next hat, left X = hat color, left Y = fur color.<br><b>Keyboard option:</b> hold Q/E, then use the <b>arrow keys</b> to swing that arm (arrows alone = look).<br><b>P</b> (or V) = third person, <b>R</b> = reset';
 addEventListener('mousemove',e=>{
   if(!locked)return;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
@@ -383,7 +345,6 @@ addEventListener('mousemove',e=>{
 // ---------- simulation ----------
 const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
 function stepPlayer(dt){
-  P.netHands=null;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
   const kx=(key.ArrowRight?1:0)-(key.ArrowLeft?1:0),ky=(key.ArrowUp?1:0)-(key.ArrowDown?1:0);
   if(!act[0]&&!act[1]){P.yaw-=kx*2*dt;P.pitch=Math.max(-1.4,Math.min(1.4,P.pitch+ky*2*dt))}
@@ -423,7 +384,7 @@ function stepPlayer(dt){
 const VS=1.4; // VR world scale: makes your real arms reach the ground like a gorilla's
 const grips=[0,1].map(i=>{const g=renderer.xr.getControllerGrip(i);rig.add(g);return g});
 const byHand=[null,null],vrPrev=[null,null],tpOff=V(),_cq=new THREE.Quaternion(),_fw=V(),_rt=V(),_pole=V();
-let vrInit=false,vrBtn=false,vrStick=false,vrLS=false,vrLF=false,hudT=0,tpYaw=0,vrYaw=0,headS=1;
+let vrInit=false,vrBtn=false,vrStick=false,vrLS=false,vrLF=false,vrLY=false,hudT=0,tpYaw=0,vrYaw=0,headS=1;
 function setHead(sc){P.g.group.traverse(o=>{if(o.isBone&&/^Head/.test(o.name.replace(/[\s_]/g,'')))o.scale.setScalar(sc)})}
 [0,1].forEach(i=>{const c=renderer.xr.getController(i);rig.add(c);
   c.addEventListener('connected',e=>{const hd=e.data.handedness==='left'?0:1;byHand[hd]={grip:grips[i],gp:e.data.gamepad};vrPrev[hd]=null});
@@ -465,8 +426,7 @@ function stepVR(dt){
   if(Math.abs(pn.x)>68){mv.x+=Math.sign(pn.x)*68-pn.x;P.vel.x=0}
   if(Math.abs(pn.z)>68){mv.z+=Math.sign(pn.z)*68-pn.z;P.vel.z=0}
   rig.position.add(mv);P.pos.copy(pb).add(mv);
-  P.netHands=w.map(hand=>hand?hand.clone().add(mv).sub(P.pos).toArray():null);
-  const gg=P.g.group;vrYaw=_eu.setFromQuaternion(xc.quaternion,'YXZ').y;P.yaw=vrYaw;
+  const gg=P.g.group;vrYaw=_eu.setFromQuaternion(xc.quaternion,'YXZ').y;
   _fw.set(-Math.sin(vrYaw),0,-Math.cos(vrYaw));_rt.set(Math.cos(vrYaw),0,-Math.sin(vrYaw));
   gg.position.copy(P.pos).addScaledVector(_fw,-0.28);gg.rotation.y=vrYaw+PI;gg.updateMatrixWorld(true);
   for(let k=0;k<2;k++)if(w[k]){
@@ -475,8 +435,8 @@ function stepVR(dt){
   }
   // any face button (A/B/X/Y) = respawn
   const bp=(k,i)=>{const gp=byHand[k]&&byHand[k].gp;return !!(gp&&gp.buttons[i]&&gp.buttons[i].pressed)};
-  const pr=bp(1,4)||bp(1,5),lS=bp(0,3),lF=bp(0,4)||bp(0,5);
-  if(lS&&!vrLS)cycleHat(1);if(lF&&!vrLF)cycleCol(1);vrLS=lS;vrLF=lF;
+  const pr=bp(1,4)||bp(1,5),lS=bp(0,3),lF=bp(0,4),lY=bp(0,5);
+  if(lS&&!vrLS)cycleHat(1);if(lF&&!vrLF)cycleCol(1);if(lY&&!vrLY)cycleFur();vrLS=lS;vrLF=lF;vrLY=lY;
   if(pr&&!vrBtn){rig.position.set(0,hgt(0,0)+0.5,0);P.vel.set(0,0,0);vrInit=true}vrBtn=pr;
   const gp1=byHand[1]&&byHand[1].gp,st=!!(gp1&&gp1.buttons[3]&&gp1.buttons[3].pressed);if(st&&!vrStick)P.third=!P.third;vrStick=st;
   if(P.third){tpYaw+=Math.atan2(Math.sin(vrYaw-tpYaw),Math.cos(vrYaw-tpYaw))*Math.min(1,1.5*dt);tpOff.set(Math.sin(tpYaw)*2.4,0.7,Math.cos(tpYaw)*2.4)}
@@ -487,25 +447,8 @@ const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
   if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
-  if(hatSpin)hatSpin.rotation.y+=dt*25;
-  for(const r of remotePlayers.values()){
-    r.g.group.position.lerp(r.targetPos,Math.min(1,dt*12));
-    r.g.group.rotation.y=r.yaw+PI;
-    r.g.group.updateMatrixWorld(true);
-    if(r.hands&&r.hands.some(Boolean)){
-      const fw=V(-Math.sin(r.yaw),0,-Math.cos(r.yaw)),rt=V(Math.cos(r.yaw),0,-Math.sin(r.yaw));
-      for(let k=0;k<2;k++){
-        if(r.hands[k]&&r.hands[k].length>=3){
-          const target=r.g.group.position.clone().add(V(r.hands[k][0],r.hands[k][1],r.hands[k][2]));
-          const pole=r.g.group.position.clone().add(V(0,-0.6,0)).addScaledVector(rt,k?0.6:-0.6).addScaledVector(fw,-0.5);
-          ik(r.g,k,target,pole);
-        }else aim(r.g,k,r.a[k]||0,r.b[k]||0);
-      }
-    }else{
-      aim(r.g,0,r.a[0]||0,r.b[0]||0);aim(r.g,1,r.a[1]||0,r.b[1]||0);
-    }
-    if(r.hatSpin)r.hatSpin.rotation.y+=dt*25;
-  }
+  if(P.g.spin)P.g.spin.rotation.y+=dt*25;
+  furTick(t);stepRemotes(dt);netTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2).add(V(0,1.4,0));cam.lookAt(P.pos)}
