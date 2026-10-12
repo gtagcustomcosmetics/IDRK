@@ -465,9 +465,20 @@ renderer.xr.addEventListener('sessionend',()=>{rig.scale.setScalar(1);rig.positi
 const _hd=V();
 // Track headset pitch on the avatar's head bone without tilting the torso.
 const _headBaseQ=P.g.rig.head.quaternion.clone(),_headWorldQ=new THREE.Quaternion(),_rigWorldQ=new THREE.Quaternion(),_headLocalQ=new THREE.Quaternion(),_headPitchQ=new THREE.Quaternion(),_headPitchAxis=V(1,0,0);
+const SNAP=PI/6,SMOOTH=PI*0.6,_Y=V(0,1,0),TURN_NAMES=['Off','Snap','Smooth'];let vrSnap=false;
+let turnMode=1; // 0 = off, 1 = snap, 2 = smooth (right stick left/right)
+try{const sv=localStorage.getItem('monkeTurn');if(sv!==null&&+sv>=0&&+sv<=2)turnMode=+sv}catch(e){}
 function stepVR(dt){
   rig.position.sub(tpOff);rig.updateMatrixWorld(true);const xc=renderer.xr.getCamera();
   const head=()=>rig.localToWorld(_hd.copy(xc.position));
+  {const gpR=byHand[1]&&byHand[1].gp,ax=gpR&&gpR.axes?(gpR.axes.length>=4?gpR.axes[2]:gpR.axes[0]):0;let tn=0;
+    if(turnMode===1){if(Math.abs(ax)>0.7){if(!vrSnap){vrSnap=true;tn=ax>0?-SNAP:SNAP}}else if(Math.abs(ax)<0.3)vrSnap=false}
+    else if(turnMode===2){vrSnap=false;const a=Math.abs(ax);if(a>0.2)tn=-Math.sign(ax)*((a-0.2)/0.8)*SMOOTH*dt}
+    else vrSnap=false;
+    if(tn&&!menuOpen){ // spin the whole rig around your head so you stay put
+      head();const H=_hd.clone();rig.rotation.y+=tn;rig.position.sub(H).applyAxisAngle(_Y,tn).add(H);rig.updateMatrixWorld(true);
+      for(let k=0;k<2;k++)if(vrPrev[k])vrPrev[k].applyAxisAngle(_Y,tn);
+      P.hist.forEach(v=>v.applyAxisAngle(_Y,tn));P.vel.applyAxisAngle(_Y,tn)}}
   head();const pb=_hd.clone();pb.y-=0.5;
   if(vrInit){rig.position.y+=hgt(pb.x,pb.z)+R-pb.y;vrInit=false;rig.updateMatrixWorld(true);head();pb.copy(_hd);pb.y-=0.5}
   const hp=_hd.clone(),disp=V(),w=[null,null];let touching=false;
@@ -504,7 +515,7 @@ function stepVR(dt){
   _headLocalQ.copy(_rigWorldQ).invert().multiply(_headWorldQ);
   _eu.setFromQuaternion(_headLocalQ,'YXZ');
   const headPitch=Math.max(-1.0,Math.min(1.0,_eu.x));
-  vrYaw=_eu.y;
+  vrYaw=_eu.y+rig.rotation.y;
   _fw.set(-Math.sin(vrYaw),0,-Math.cos(vrYaw));_rt.set(Math.cos(vrYaw),0,-Math.sin(vrYaw));
   gg.position.copy(P.pos).addScaledVector(_fw,-0.28);gg.rotation.y=vrYaw+PI;
   P.g.rig.head.quaternion.copy(_headBaseQ).multiply(_headPitchQ.setFromAxisAngle(_headPitchAxis,-headPitch));
@@ -528,22 +539,23 @@ const MW=512,MH=384,menuCv=document.createElement('canvas');menuCv.width=MW;menu
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
 menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
-const MBTN=[{id:'voice',x:40,y:110,w:432,h:90},{id:'close',x:40,y:230,w:432,h:90}];
+const MBTN=[{id:'voice',x:40,y:92,w:432,h:76},{id:'turn',x:40,y:184,w:432,h:76},{id:'close',x:40,y:276,w:432,h:76}];
 let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,gripHold=0,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x+w,y+h,x,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
 function drawMenu(){
-  const key=menuHover+'|'+voiceOn+'|'+micOK;if(key===menuDrawKey)return;menuDrawKey=key;
+  const key=menuHover+'|'+voiceOn+'|'+micOK+'|'+turnMode;if(key===menuDrawKey)return;menuDrawKey=key;
   const x=menuCx;x.clearRect(0,0,MW,MH);
   x.fillStyle='rgba(0,0,0,.82)';rr(0,0,MW,MH,28);x.fill();
-  x.fillStyle='#fff';x.font='bold 44px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,74);
+  x.fillStyle='#fff';x.font='bold 40px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,62);
   MBTN.forEach((b,i)=>{
     let col='#555',txt='Close menu',fg='#fff';
     if(b.id==='voice'){col=voiceOn?'#3ecf6a':'#d9534f';fg=voiceOn?'#000':'#fff';txt='Voice chat: '+(voiceOn?(micOK===false?'ON (no mic)':'ON'):'OFF')}
+    else if(b.id==='turn'){col=turnMode?'#3b82f6':'#666';txt='Turning: '+TURN_NAMES[turnMode]}
     x.fillStyle=col;rr(b.x,b.y,b.w,b.h,18);x.fill();
     if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=7;rr(b.x,b.y,b.w,b.h,18);x.stroke()}
-    x.fillStyle=fg;x.font='bold 36px system-ui,sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+13);
+    x.fillStyle=fg;x.font='bold 32px system-ui,sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+11);
   });
-  x.fillStyle='#aaa';x.font='22px system-ui,sans-serif';x.fillText('Point and pull the trigger',MW/2,356);
+  x.fillStyle='#aaa';x.font='20px system-ui,sans-serif';x.fillText('Point and pull the trigger',MW/2,374);
   menuTex.needsUpdate=true;
 }
 const ctrls=[0,1].map(i=>renderer.xr.getController(i));
@@ -559,7 +571,7 @@ function setMenu(on){
   menuHover=-1;menuDrawKey='';drawMenu();
 }
 const pulse=gp=>{try{const a=gp&&gp.hapticActuators&&gp.hapticActuators[0];if(a&&a.pulse)a.pulse(0.4,40)}catch(e){}};
-function menuClick(id){if(id==='voice')setVoice(!voiceOn);else if(id==='close')setMenu(false)}
+function menuClick(id){if(id==='voice')setVoice(!voiceOn);else if(id==='turn'){turnMode=(turnMode+1)%3;vrSnap=false;try{localStorage.setItem('monkeTurn',turnMode)}catch(e){}}else if(id==='close')setMenu(false)}
 function vrMenuTick(dt){
   if(!renderer.xr.isPresenting){if(menuOpen)setMenu(false);return}
   const gp0=byHand[0]&&byHand[0].gp,gp1=byHand[1]&&byHand[1].gp;
