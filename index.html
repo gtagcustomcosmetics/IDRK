@@ -70,7 +70,7 @@ try{
   Start at 10x for this map export; change it to 1 if your Blender export is
   already using the same world scale as the game.
 */
-const MAP_SCALE = 10;
+const MAP_SCALE = 4;
 mapGltf.scene.scale.setScalar(MAP_SCALE);
 scene.add(mapGltf.scene);
 mapGltf.scene.updateMatrixWorld(true);
