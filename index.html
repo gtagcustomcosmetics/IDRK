@@ -172,16 +172,17 @@ reset();
 // ---------- username-locked hand cosmetic ----------
 // Keep stick.fbx beside index.html. Only the username LOKE can equip it.
 const HAND_COSMETIC_USERNAME='LOKE';
-let handCosmeticSource=null, handCosmetic=null;
+let handCosmeticSource=null, handCosmetic=null, handCosmeticEquipped=false;
 const handCosmeticLoader=new FBXLoader();
 handCosmeticLoader.load('stick.fbx', fbx=>{
   handCosmeticSource=fbx;
   handCosmeticSource.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;}});
+  refreshHandCosmeticButton();
   updateHandCosmetic();
 }, undefined, err=>console.warn('Could not load stick.fbx:',err));
 function updateHandCosmetic(){
   if(handCosmetic){P.g.rig.wrist[1].remove(handCosmetic);handCosmetic=null;}
-  if(!handCosmeticSource || myName().toUpperCase()!==HAND_COSMETIC_USERNAME)return;
+  if(!handCosmeticSource || !handCosmeticEquipped || myName().trim().toUpperCase()!==HAND_COSMETIC_USERNAME)return;
   handCosmetic=handCosmeticSource.clone(true);
   // Initial placement on the right hand; adjust these values if the stick appears rotated or too large.
   handCosmetic.scale.setScalar(0.01);
@@ -227,6 +228,11 @@ try{const sv=JSON.parse(localStorage.getItem('monkeCos')||'{}');if(sv.hat>=0&&sv
 const cosEl=document.createElement('div');cosEl.id='cos';
 cosEl.innerHTML='<b>Wardrobe</b><div id="hl"></div><div id="cl"></div><b>Fur color</b><div id="fl"></div><small>In game: <b>H</b> hat, <b>C</b> hat color, <b>F</b> fur color.<br>Check yourself in the mirror!<br>Click outside this box to play.</small>';
 $('help').appendChild(cosEl);['click','mousedown'].forEach(ev=>cosEl.addEventListener(ev,e=>e.stopPropagation()));
+const secretCosmeticRow=document.createElement('div'); secretCosmeticRow.id='secretCosmeticRow'; secretCosmeticRow.style.margin='6px 0';
+const secretCosmeticBtn=document.createElement('button'); secretCosmeticBtn.textContent='Secret Stick'; secretCosmeticBtn.disabled=true; secretCosmeticBtn.title='Available to LOKE only';
+secretCosmeticBtn.onclick=()=>{if(myName().trim().toUpperCase()!==HAND_COSMETIC_USERNAME)return;handCosmeticEquipped=!handCosmeticEquipped;updateHandCosmetic();refreshHandCosmeticButton()};
+secretCosmeticRow.appendChild(secretCosmeticBtn);$('hl').parentNode.insertBefore(secretCosmeticRow,$('hl').nextSibling);
+function refreshHandCosmeticButton(){if(!secretCosmeticBtn)return;const allowed=myName().trim().toUpperCase()===HAND_COSMETIC_USERNAME;secretCosmeticRow.style.display=allowed?'block':'none';secretCosmeticBtn.disabled=!handCosmeticSource;secretCosmeticBtn.textContent=handCosmeticEquipped?'Unequip Secret Stick':'Equip Secret Stick';secretCosmeticBtn.title=handCosmeticSource?'LOKE-only cosmetic':'Loading stick.fbx...'}
 hatDefs.forEach((h,i)=>{const b=document.createElement('button');b.textContent=h[0];b.onclick=()=>{cos.hat=i;wearHat()};$('hl').appendChild(b)});
 COLS.forEach((c,i)=>{const d=document.createElement('span');d.className='sw';d.style.background='#'+c.toString(16).padStart(6,'0');d.onclick=()=>{cos.col=i;wearHat()};$('cl').appendChild(d)});
 const FURS=[0xffffff,0xe8742a,0xd62f2f,0xff7eb6,0x9b59b6,0x3b7ddd,0x25c4e8,0x2ecc71,0xb6e63a,0xf6d32d,0x8a5a2b,0x2b2b2b,-1];
@@ -262,7 +268,7 @@ function mkTag(txt){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));sp.scale.set(.8,.2,1);sp.renderOrder=5;sp.position.set(0,1.05,0);return sp;
 }
 P.tag=mkTag(myName());P.g.group.add(P.tag);
-$('mpname').addEventListener('input',()=>{P.g.group.remove(P.tag);P.tag=mkTag(myName());P.g.group.add(P.tag);updateHandCosmetic();
+$('mpname').addEventListener('input',()=>{P.g.group.remove(P.tag);P.tag=mkTag(myName());P.g.group.add(P.tag);updateHandCosmetic();refreshHandCosmeticButton();
   try{localStorage.setItem('monkeName',myName())}catch(e){}netSend({t:'n',name:myName()})});
 function addRemote(id,name,hat,col,fur){
   let r=remotes.get(id);
