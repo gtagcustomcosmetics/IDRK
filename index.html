@@ -258,10 +258,10 @@ function onData(id0,d){
   else if(d.t==='q'){const r=remotes.get(id);if(r)r.seq=d.seq}
   else if(d.t==='c')addRemote(id,undefined,d.hat,d.col,d.fur);
   else if(d.t==='n')addRemote(id,d.name);
-  else if(d.t==='host'){if(net)net.hostKnown=true}
+  else if(d.t==='host'){if(net){net.hostKnown=true;alias.set(HOST_ID,id)}}
   else if(d.t==='g')applyGame(d);
-  else if(d.t==='full'&&net&&!net.host){const p=net.peer;net=null;try{p.destroy()}catch(e){}[...remotes.keys()].forEach(dropRemote);
-    setStat(`Lobby is full (${MAX_PLAYERS}/${MAX_PLAYERS}). Waiting for a free spot...`);setTimeout(joinLobby,5000)}
+  else if(d.t==='full'&&net&&!net.host){resetNet();
+    setStat(`Lobby is full (${MAX_PLAYERS}/${MAX_PLAYERS}). Waiting for a free spot...`);retryJoin(5000)}
   else if(d.t==='s'){const r=addRemote(id);if(!r.tp){r.pos.set(d.p[0],d.p[1],d.p[2]);r.ry=d.r;r.h[0].set(d.h[0],d.h[1],d.h[2]);r.h[1].set(d.h[3],d.h[4],d.h[5])}r.tp=d}
   else if(d.t==='peers'&&net){if(d.seq!==undefined&&net.seq===9999){net.seq=d.seq;netSend({t:'q',seq:d.seq})}d.ids.forEach(connectTo)}
 }
@@ -277,7 +277,7 @@ function wire(c){
   c.on('close',()=>{
     if(net&&net.conns.get(id)===c)net.conns.delete(id);
     if(!net||![...net.conns.keys()].some(k=>key_(k)===key_(id)))dropRemote(key_(id));
-    if(net&&!net.host&&id===HOST_ID)claimHost();
+    if(net&&!net.host&&isHostKey(id))claimHost();
   });
   c.on('error',()=>{});
 }
@@ -287,28 +287,59 @@ function claimHost(){
   const hk=key_(HOST_ID),rank=[...remotes].filter(([k,r])=>k!==hk&&(r.seq===undefined?9999:r.seq)<net.seq).length;
   net.hostKnown=false;
   setTimeout(()=>{
-    if(!net||net.host||net.hostKnown||net.conns.has(HOST_ID))return;
-    const hp=new Peer(HOST_ID,PEEROPTS);
-    hp.on('open',()=>{if(!net){hp.destroy();return}net.host=true;net.hostPeer=hp;
+    if(!net||net.host||net.hostKnown||[...net.conns.keys()].some(isHostKey))return;
+    const hp=new Peer(HOST_ID,PEEROPTS);keepBroker(hp);
+    hp.on('open',()=>{if(hp._claimed)return;hp._claimed=1;if(!net){hp.destroy();return}net.host=true;net.hostPeer=hp;
       net.n=Math.max(net.seq,...[...remotes.values()].map(r=>r.seq===undefined||r.seq===9999?0:r.seq))+1;hp.on('connection',wire);updCount();netSend({t:'host'})});
     hp.on('error',e=>{if(e.type==='unavailable-id'){hp.destroy();setTimeout(()=>{if(net&&!net.host&&!net.hostKnown)connectTo(HOST_ID)},1500)}});
   },rank===0?300:1500+rank*1500);
 }
+let joinTimer=0;
+const retryJoin=ms=>{clearTimeout(joinTimer);joinTimer=setTimeout(joinLobby,ms)};
+// is this connection id the lobby host? (the host name can be taken over by another player, see claimHost)
+const isHostKey=k=>key_(k)===key_(HOST_ID);
+// tear everything down so joinLobby can start clean (also clears ghost players)
+function resetNet(){
+  const n=net;net=null;
+  if(n){try{n.conns.forEach(c=>{try{c.close()}catch(e){}})}catch(e){}
+    try{n.peer.destroy()}catch(e){}try{if(n.hostPeer)n.hostPeer.destroy()}catch(e){}}
+  [...remotes.keys()].forEach(dropRemote);
+}
+// the free PeerJS broker drops idle/backgrounded tabs. When that happens the lobby name is released and new players
+// would start a second, separate lobby, so always try to reconnect to the broker.
+function keepBroker(p){p.on('disconnected',()=>setTimeout(()=>{if(!p.destroyed&&p.disconnected){try{p.reconnect()}catch(e){}}},1000))}
 function joinLobby(){
   if(!window.Peer){setStat('Multiplayer library failed to load');return}
+  if(net)return;
   setStat('Connecting...');
-  const p=new Peer(HOST_ID,PEEROPTS);
-  p.on('open',()=>{net={peer:p,conns:new Map(),host:true,seq:0,n:1};p.on('connection',wire);updCount()});
+  const p=new Peer(HOST_ID,PEEROPTS);keepBroker(p);
+  p.on('open',()=>{if(net&&net.peer===p)return;net={peer:p,conns:new Map(),host:true,seq:0,n:1};p.on('connection',wire);updCount()});
   p.on('error',e=>{
     if(e.type==='unavailable-id'){
-      p.destroy();const g=new Peer(undefined,PEEROPTS);
-      g.on('open',()=>{net={peer:g,conns:new Map(),host:false,seq:9999,n:0};g.on('connection',wire);connectTo(HOST_ID);updCount()});
+      resetNet();try{p.destroy()}catch(x){}const g=new Peer(undefined,PEEROPTS);keepBroker(g);
+      g.on('open',()=>{if(net&&net.peer===g)return;net={peer:g,conns:new Map(),host:false,seq:9999,n:0};g.on('connection',wire);connectTo(HOST_ID);updCount()});
       g.on('error',e2=>{
-        if(e2.type==='peer-unavailable'){g.destroy();net=null;setStat('Looking for the lobby...');setTimeout(joinLobby,2000+Math.random()*2000)}
-        else setStat('Network error: '+e2.type)});
-    }else setStat('Network error: '+e.type);
+        if(e2.type==='peer-unavailable'){
+          if(!String(e2.message||'').includes(HOST_ID))return;   // some other player already left: ignore, don't kick ourselves out
+          resetNet();try{g.destroy()}catch(x){}setStat('Looking for the lobby...');retryJoin(2000+Math.random()*2000)}
+        else if(['network','server-error','socket-error','socket-closed'].includes(e2.type)){
+          resetNet();try{g.destroy()}catch(x){}setStat('Network error ('+e2.type+'), retrying...');retryJoin(4000)}
+        else if(e2.type!=='webrtc')setStat('Network error: '+e2.type);
+      });
+    }else if(['network','server-error','socket-error','socket-closed'].includes(e.type)){
+      resetNet();try{p.destroy()}catch(x){}setStat('Network error ('+e.type+'), retrying...');retryJoin(4000);
+    }else if(e.type!=='webrtc')setStat('Network error: '+e.type);
   });
 }
+// keepalive that does not depend on the render loop (background tabs stop rendering, which used to get you dropped after 8s)
+setInterval(()=>{if(net)netSend({t:'ka'})},2000);
+// watchdog: a guest with no open connection to anybody for ~12s is stuck (host vanished, connection never opened): start over
+let lonely=0;
+setInterval(()=>{
+  if(!net||net.host){lonely=0;return}
+  if([...net.conns.values()].some(c=>c.open)){lonely=0;return}
+  if(++lonely>=4){lonely=0;resetNet();setStat('Reconnecting...');retryJoin(500+Math.random()*1500)}
+},3000);
 function stepRemotes(dt){
   const k=Math.min(1,12*dt);
   remotes.forEach(r=>{const d=r.tp;if(!d)return;
@@ -323,8 +354,8 @@ function stepRemotes(dt){
 }
 function netTick(dt){
   if(!net)return;
-  const now=performance.now();   // drop players who went silent (closed tab, lost connection) after 8 seconds
-  remotes.forEach((r,id)=>{if(now-r.last>8000){net.conns.forEach((c,k)=>{if(key_(k)===id){try{c.close()}catch(e){}net.conns.delete(k);if(k===HOST_ID&&!net.host)claimHost()}});dropRemote(id)}});
+  const now=performance.now();   // drop players who went silent (closed tab, lost connection) after 15 seconds
+  remotes.forEach((r,id)=>{if(now-r.last>15000){net.conns.forEach((c,k)=>{if(key_(k)===id){try{c.close()}catch(e){}net.conns.delete(k);if(isHostKey(k)&&!net.host)claimHost()}});dropRemote(id)}});
   netT-=dt;if(netT>0||!net.conns.size)return;netT=1/15;
   const g=P.g.group,a=P.g.rig.wrist[0].getWorldPosition(V()),b=P.g.rig.wrist[1].getWorldPosition(V());
   netSend({t:'s',p:fl([g.position.x,g.position.y,g.position.z]),r:Math.round(g.rotation.y*100)/100,h:fl([a.x,a.y,a.z,b.x,b.y,b.z]),s:SIZE,hp:Math.round(netHeadPitch*100)/100});
