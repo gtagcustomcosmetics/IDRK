@@ -31,6 +31,7 @@ canvas{display:block}
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {FBXLoader} from 'three/addons/loaders/FBXLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
@@ -168,6 +169,27 @@ function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+(R+0.2)*SIZE;P.vel.set(0,0,0)
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
 
+// ---------- username-locked hand cosmetic ----------
+// Keep stick.fbx beside index.html. Only the username LOKE can equip it.
+const HAND_COSMETIC_USERNAME='LOKE';
+let handCosmeticSource=null, handCosmetic=null;
+const handCosmeticLoader=new FBXLoader();
+handCosmeticLoader.load('stick.fbx', fbx=>{
+  handCosmeticSource=fbx;
+  handCosmeticSource.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;}});
+  updateHandCosmetic();
+}, undefined, err=>console.warn('Could not load stick.fbx:',err));
+function updateHandCosmetic(){
+  if(handCosmetic){P.g.rig.wrist[1].remove(handCosmetic);handCosmetic=null;}
+  if(!handCosmeticSource || myName().toUpperCase()!==HAND_COSMETIC_USERNAME)return;
+  handCosmetic=handCosmeticSource.clone(true);
+  // Initial placement on the right hand; adjust these values if the stick appears rotated or too large.
+  handCosmetic.scale.setScalar(0.01);
+  handCosmetic.position.set(0,-0.08,0.04);
+  handCosmetic.rotation.set(0,0,0);
+  P.g.rig.wrist[1].add(handCosmetic);
+}
+
 // ---------- cosmetics: hats (procedural, attached to the head bone) ----------
 const COLS=[0xc0392b,0x2980b9,0x27ae60,0xf1c40f,0x8e44ad,0xf2f2f2,0x2b2b2b,0xe67e22];
 const MT=(c,r=0.7)=>new THREE.MeshStandardMaterial({color:c,roughness:r,side:THREE.DoubleSide});
@@ -240,7 +262,7 @@ function mkTag(txt){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));sp.scale.set(.8,.2,1);sp.renderOrder=5;sp.position.set(0,1.05,0);return sp;
 }
 P.tag=mkTag(myName());P.g.group.add(P.tag);
-$('mpname').addEventListener('input',()=>{P.g.group.remove(P.tag);P.tag=mkTag(myName());P.g.group.add(P.tag);
+$('mpname').addEventListener('input',()=>{P.g.group.remove(P.tag);P.tag=mkTag(myName());P.g.group.add(P.tag);updateHandCosmetic();
   try{localStorage.setItem('monkeName',myName())}catch(e){}netSend({t:'n',name:myName()})});
 function addRemote(id,name,hat,col,fur){
   let r=remotes.get(id);
