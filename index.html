@@ -70,32 +70,35 @@ try{
   Start at 10x for this map export; change it to 1 if your Blender export is
   already using the same world scale as the game.
 */
-const MAP_SCALE = 4;
+const MAP_SCALE = 2;
 mapGltf.scene.scale.setScalar(MAP_SCALE);
 scene.add(mapGltf.scene);
 mapGltf.scene.updateMatrixWorld(true);
 
 let hf,N,minX,minZ,step;
-const mapGroundMeshes=[];
+// The map's actual triangle meshes are the collision surfaces. Do not replace
+// them with bounding boxes or a heightmap: those would incorrectly seal holes.
+const mapColliderMeshes=[];
 mapGltf.scene.traverse(o=>{
   if(!o.isMesh)return;
-  mapGroundMeshes.push(o);
-  // Preserve each GLB material, its baked/base-color texture, and UVs.
-  // Only ensure normals/material updates are ready for Three.js.
+  mapColliderMeshes.push(o);
+  // Keep the exported mesh geometry and materials intact.
   if(o.geometry && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
   if(Array.isArray(o.material)) o.material.forEach(m=>{if(m)m.needsUpdate=true;});
   else if(o.material) o.material.needsUpdate=true;
 });
 
-// Build a fallback height sample from the actual map surfaces with raycasting.
-// This works with separate rocks/ground pieces and doesn't replace their textures.
+// Raycast against the real mesh triangles for ground contact. A ray that passes
+// through a real opening finds no surface at that X/Z, rather than an invented
+// flat collider covering the hole. DoubleSide lets thin surfaces be hit from
+// either direction while preserving the original render materials.
 const groundRaycaster = new THREE.Raycaster();
 const groundRayOrigin = new THREE.Vector3();
 const groundRayDirection = new THREE.Vector3(0,-1,0);
 function hgt(x,z){
   groundRayOrigin.set(x,10000,z);
   groundRaycaster.set(groundRayOrigin,groundRayDirection);
-  const hits=groundRaycaster.intersectObjects(mapGroundMeshes,true);
+  const hits=groundRaycaster.intersectObjects(mapColliderMeshes,true);
   for(const hit of hits){
     if(hit.face && hit.object.visible) return hit.point.y;
   }
