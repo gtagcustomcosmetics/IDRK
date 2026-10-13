@@ -225,7 +225,7 @@ wearHat();
 
 // ---------- multiplayer: ONE public lobby, WebRTC peer-to-peer via PeerJS ----------
 const MAX_PLAYERS=4,PEEROPTS={},HOST_ID='lokeworks-monkegame-public-lobby';
-const remotes=new Map(),alias=new Map(),_tv=V();let netT=0,netHeadPitch=0;
+const remotes=new Map(),alias=new Map(),_tv=V(),_X=V(1,0,0);let netT=0,netHeadPitch=0;
 const key_=id=>alias.get(id)||id,fl=a=>a.map(v=>Math.round(v*100)/100);
 const mpEl=document.createElement('div');mpEl.id='mp';
 mpEl.innerHTML='<b>Public lobby</b><br>Your name <input id="mpname" maxlength="14"><div id="mpstat">Connecting...</div><small>Everyone plays in one public lobby (up to 4 players). Your name shows above your head.</small><br>Game mode <select id="gm"><option value="free">Casual</option><option value="tag">Tag</option></select><div id="gmnote"></div><button id="micbtn"></button><button id="hearbtn"></button><button id="sfxbtn"></button>';
