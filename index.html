@@ -61,35 +61,46 @@ try{
 }
 
 // ---------- map + heightfield ----------
-function groundTexture(){
-  const S=512,c=document.createElement('canvas');c.width=c.height=S;const x=c.getContext('2d');
-  x.fillStyle='#6a9a47';x.fillRect(0,0,S,S);
-  const rnd=(a,b)=>a+Math.random()*(b-a),wrap=f=>{for(const dx of[-S,0,S])for(const dy of[-S,0,S])f(dx,dy)};
-  for(let i=0;i<45;i++){const px=rnd(0,S),py=rnd(0,S),r=rnd(30,90),col=Math.random()<.5?'rgba(150,190,80,.10)':'rgba(40,90,40,.10)';
-    wrap((dx,dy)=>{x.fillStyle=col;x.beginPath();x.arc(px+dx,py+dy,r,0,7);x.fill()})}
-  for(let i=0;i<14000;i++){const px=rnd(0,S),py=rnd(0,S),l=rnd(3,9),a=rnd(-.5,.5)-1.57,h=rnd(75,115),li=rnd(28,52);
-    x.strokeStyle=`hsl(${h},50%,${li}%)`;x.lineWidth=rnd(.7,1.6);
-    wrap((dx,dy)=>{x.beginPath();x.moveTo(px+dx,py+dy);x.lineTo(px+dx+Math.cos(a)*l,py+dy+Math.sin(a)*l);x.stroke()})}
-  for(let i=0;i<300;i++){const px=rnd(0,S),py=rnd(0,S);x.fillStyle=Math.random()<.5?'rgba(255,240,150,.7)':'rgba(255,255,255,.6)';
-    wrap((dx,dy)=>x.fillRect(px+dx,py+dy,2,2))}
-  const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=8;return t;
-}
-scene.add(mapGltf.scene);mapGltf.scene.updateMatrixWorld(true);
-let hf,N,minX,minZ,step;
-mapGltf.scene.traverse(o=>{if(!o.isMesh)return;
-  const g=o.geometry;g.computeVertexNormals();o.material.flatShading=false;o.material.needsUpdate=true;
-  const p=g.attributes.position,v=V(),pts=[],uv=new Float32Array(p.count*2);let mx=1e9,mz=1e9,Mx=-1e9;
-  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);uv[i*2]=v.x/8;uv[i*2+1]=v.z/8;mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
-  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));o.material.map=groundTexture();o.material.color.set(0xffffff);o.material.needsUpdate=true;
-  N=Math.round(Math.sqrt(p.count));minX=mx;minZ=mz;step=(Mx-mx)/(N-1);hf=new Float32Array(N*N);
-  for(let i=0;i<pts.length;i+=3){const ix=Math.round((pts[i]-minX)/step),iz=Math.round((pts[i+2]-minZ)/step);hf[iz*N+ix]=pts[i+1]}
-});
-function hgt(x,z){
-  const fx=Math.min(Math.max((x-minX)/step,0),N-1.001),fz=Math.min(Math.max((z-minZ)/step,0),N-1.001);
-  const ix=fx|0,iz=fz|0,tx=fx-ix,tz=fz-iz,a=hf[iz*N+ix],b=hf[iz*N+ix+1],c=hf[(iz+1)*N+ix],d=hf[(iz+1)*N+ix+1];
-  return (a*(1-tx)+b*tx)*(1-tz)+(c*(1-tx)+d*tx)*tz;
-}
+/*
+  Keep the materials and baked textures embedded in the GLB.
+  The previous version replaced every mesh material with a generated grass
+  texture, which made the entire map look like one texture.
 
+  MAP_SCALE is an easy adjustment if the exported map still appears too small.
+  Start at 10x for this map export; change it to 1 if your Blender export is
+  already using the same world scale as the game.
+*/
+const MAP_SCALE = 10;
+mapGltf.scene.scale.setScalar(MAP_SCALE);
+scene.add(mapGltf.scene);
+mapGltf.scene.updateMatrixWorld(true);
+
+let hf,N,minX,minZ,step;
+const mapGroundMeshes=[];
+mapGltf.scene.traverse(o=>{
+  if(!o.isMesh)return;
+  mapGroundMeshes.push(o);
+  // Preserve each GLB material, its baked/base-color texture, and UVs.
+  // Only ensure normals/material updates are ready for Three.js.
+  if(o.geometry && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+  if(Array.isArray(o.material)) o.material.forEach(m=>{if(m)m.needsUpdate=true;});
+  else if(o.material) o.material.needsUpdate=true;
+});
+
+// Build a fallback height sample from the actual map surfaces with raycasting.
+// This works with separate rocks/ground pieces and doesn't replace their textures.
+const groundRaycaster = new THREE.Raycaster();
+const groundRayOrigin = new THREE.Vector3();
+const groundRayDirection = new THREE.Vector3(0,-1,0);
+function hgt(x,z){
+  groundRayOrigin.set(x,10000,z);
+  groundRaycaster.set(groundRayOrigin,groundRayDirection);
+  const hits=groundRaycaster.intersectObjects(mapGroundMeshes,true);
+  for(const hit of hits){
+    if(hit.face && hit.object.visible) return hit.point.y;
+  }
+  return 0;
+}
 // ---------- mirror (stands in front of the spawn point, facing it) ----------
 {
   const mx=0,mz=-3.5,base=Math.min(hgt(mx-1.5,mz),hgt(mx,mz),hgt(mx+1.5,mz));
