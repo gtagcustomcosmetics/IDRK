@@ -62,28 +62,16 @@ try{
 }
 
 // ---------- map + heightfield ----------
-function groundTexture(){
-  const S=512,c=document.createElement('canvas');c.width=c.height=S;const x=c.getContext('2d');
-  x.fillStyle='#6a9a47';x.fillRect(0,0,S,S);
-  const rnd=(a,b)=>a+Math.random()*(b-a),wrap=f=>{for(const dx of[-S,0,S])for(const dy of[-S,0,S])f(dx,dy)};
-  for(let i=0;i<45;i++){const px=rnd(0,S),py=rnd(0,S),r=rnd(30,90),col=Math.random()<.5?'rgba(150,190,80,.10)':'rgba(40,90,40,.10)';
-    wrap((dx,dy)=>{x.fillStyle=col;x.beginPath();x.arc(px+dx,py+dy,r,0,7);x.fill()})}
-  for(let i=0;i<14000;i++){const px=rnd(0,S),py=rnd(0,S),l=rnd(3,9),a=rnd(-.5,.5)-1.57,h=rnd(75,115),li=rnd(28,52);
-    x.strokeStyle=`hsl(${h},50%,${li}%)`;x.lineWidth=rnd(.7,1.6);
-    wrap((dx,dy)=>{x.beginPath();x.moveTo(px+dx,py+dy);x.lineTo(px+dx+Math.cos(a)*l,py+dy+Math.sin(a)*l);x.stroke()})}
-  for(let i=0;i<300;i++){const px=rnd(0,S),py=rnd(0,S);x.fillStyle=Math.random()<.5?'rgba(255,240,150,.7)':'rgba(255,255,255,.6)';
-    wrap((dx,dy)=>x.fillRect(px+dx,py+dy,2,2))}
-  const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=8;return t;
-}
 scene.add(mapGltf.scene);mapGltf.scene.updateMatrixWorld(true);
 let hf,N,minX,minZ,step;
 mapGltf.scene.traverse(o=>{if(!o.isMesh)return;
-  const g=o.geometry;g.computeVertexNormals();o.material.flatShading=false;o.material.needsUpdate=true;
-  const p=g.attributes.position,v=V(),pts=[],uv=new Float32Array(p.count*2);let mx=1e9,mz=1e9,Mx=-1e9;
-  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);uv[i*2]=v.x/8;uv[i*2+1]=v.z/8;mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
-  g.setAttribute('uv',new THREE.BufferAttribute(uv,2));o.material.map=groundTexture();o.material.color.set(0xffffff);o.material.needsUpdate=true;
+  // Preserve the map's exported materials, baked textures, and original UVs.
+  const g=o.geometry;
+  const p=g.attributes.position,v=V(),pts=[];let mx=1e9,mz=1e9,Mx=-1e9;
+  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld);pts.push(v.x,v.y,v.z);mx=Math.min(mx,v.x);mz=Math.min(mz,v.z);Mx=Math.max(Mx,v.x)}
+  // Keep existing normals/materials; do not generate a replacement grass texture.
   N=Math.round(Math.sqrt(p.count));minX=mx;minZ=mz;step=(Mx-mx)/(N-1);hf=new Float32Array(N*N);
-  for(let i=0;i<pts.length;i+=3){const ix=Math.round((pts[i]-minX)/step),iz=Math.round((pts[i+2]-minZ)/step);hf[iz*N+ix]=pts[i+1]}
+  for(let i=0;i<pts.length;i+=3){const ix=Math.round((pts[i]-minX)/step),iz=Math.round((pts[i+2]-minZ)/step);if(ix>=0&&ix<N&&iz>=0&&iz<N)hf[iz*N+ix]=pts[i+1]}
 });
 function hgt(x,z){
   const fx=Math.min(Math.max((x-minX)/step,0),N-1.001),fz=Math.min(Math.max((z-minZ)/step,0),N-1.001);
