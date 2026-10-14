@@ -962,11 +962,12 @@ function menuClick(id,uvX=0.5){
 }
 function vrMenuTick(dt){
   if(!renderer.xr.isPresenting){if(menuOpen)setMenu(false);return}
-  const gp0=byHand[0]&&byHand[0].gp,gp1=byHand[1]&&byHand[1].gp;
-  // Only the dedicated menu control on the LEFT controller may toggle this menu.
-  // Grip holds, face buttons, thumbsticks, and arbitrary extra buttons are ignored.
-  const menuButton=!!(gp0&&gp0.buttons[7]&&gp0.buttons[7].pressed);
-  const req=menuButton;
+  const gp0=byHand[0]&&byHand[0].gp;
+  // Menu toggle: ONLY the three-line/menu control reported by the LEFT controller.
+  // Never use grip buttons as a substitute. WebXR/browser mappings vary, so inspect
+  // the extra left-controller buttons (index 6 onward) where that control may appear.
+  let req=false;
+  if(gp0) for(let i=6;i<gp0.buttons.length;i++) if(gp0.buttons[i]&&gp0.buttons[i].pressed) req=true;
   if(!mArm){if(!req)mArm=true;mPrevReq=req}else{if(req&&!mPrevReq)setMenu(!menuOpen);mPrevReq=req}
   if(!menuOpen)return;
   let hov=-1;
