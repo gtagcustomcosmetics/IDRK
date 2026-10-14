@@ -61,6 +61,112 @@ try{
   throw e;
 }
 
+// ---------- map collider: real triangle collision for the map mesh ----------
+// The old physics only asked "how high is the floor under me?" with one ray pointing down, so walking sideways into a
+// stump/tree did nothing until the ray happened to land on top of it (pop up) or start inside it (sink through).
+// This collides the body (a sphere) and each hand (a small sphere) against the actual triangles: it can't enter solid
+// geometry, it slides along walls, and it rolls over small bumps. Triangles are treated as two-sided (the ground
+// in this model is a thin two-layer shell, so face direction can't be trusted).
+const MapCol=(()=>{
+  const CELL=2.5;
+  let T=new Float32Array(0),N=0,grid=new Map(),stamp=new Int32Array(0),stampN=0;
+  let qx=0,qy=0,qz=0; // result of closest()
+  const key=(ix,iy,iz)=>((ix+1024)*2048+(iy+1024))*2048+(iz+1024);
+  function setTriangles(arr){
+    T=arr;N=(arr.length/9)|0;stamp=new Int32Array(N);stampN=0;grid=new Map();
+    for(let t=0;t<N;t++){
+      const o=t*9;
+      const x0=Math.min(T[o],T[o+3],T[o+6]),x1=Math.max(T[o],T[o+3],T[o+6]);
+      const y0=Math.min(T[o+1],T[o+4],T[o+7]),y1=Math.max(T[o+1],T[o+4],T[o+7]);
+      const z0=Math.min(T[o+2],T[o+5],T[o+8]),z1=Math.max(T[o+2],T[o+5],T[o+8]);
+      const ix0=Math.floor(x0/CELL),ix1=Math.floor(x1/CELL),iy0=Math.floor(y0/CELL),iy1=Math.floor(y1/CELL),iz0=Math.floor(z0/CELL),iz1=Math.floor(z1/CELL);
+      for(let ix=ix0;ix<=ix1;ix++)for(let iy=iy0;iy<=iy1;iy++)for(let iz=iz0;iz<=iz1;iz++){
+        const k=key(ix,iy,iz);let L=grid.get(k);if(!L){L=[];grid.set(k,L)}L.push(t);
+      }
+    }
+  }
+  // closest point on triangle t to p -> qx,qy,qz
+  function closest(px,py,pz,t){
+    const o=t*9,ax=T[o],ay=T[o+1],az=T[o+2],bx=T[o+3],by=T[o+4],bz=T[o+5],cx=T[o+6],cy=T[o+7],cz=T[o+8];
+    const abx=bx-ax,aby=by-ay,abz=bz-az,acx=cx-ax,acy=cy-ay,acz=cz-az,apx=px-ax,apy=py-ay,apz=pz-az;
+    const d1=abx*apx+aby*apy+abz*apz,d2=acx*apx+acy*apy+acz*apz;
+    if(d1<=0&&d2<=0){qx=ax;qy=ay;qz=az;return}
+    const bpx=px-bx,bpy=py-by,bpz=pz-bz,d3=abx*bpx+aby*bpy+abz*bpz,d4=acx*bpx+acy*bpy+acz*bpz;
+    if(d3>=0&&d4<=d3){qx=bx;qy=by;qz=bz;return}
+    const vc=d1*d4-d3*d2;
+    if(vc<=0&&d1>=0&&d3<=0){const v=d1/(d1-d3);qx=ax+abx*v;qy=ay+aby*v;qz=az+abz*v;return}
+    const cpx=px-cx,cpy=py-cy,cpz=pz-cz,d5=abx*cpx+aby*cpy+abz*cpz,d6=acx*cpx+acy*cpy+acz*cpz;
+    if(d6>=0&&d5<=d6){qx=cx;qy=cy;qz=cz;return}
+    const vb=d5*d2-d1*d6;
+    if(vb<=0&&d2>=0&&d6<=0){const w=d2/(d2-d6);qx=ax+acx*w;qy=ay+acy*w;qz=az+acz*w;return}
+    const va=d3*d6-d5*d4;
+    if(va<=0&&(d4-d3)>=0&&(d5-d6)>=0){const w=(d4-d3)/((d4-d3)+(d5-d6));qx=bx+(cx-bx)*w;qy=by+(cy-by)*w;qz=bz+(cz-bz)*w;return}
+    const den=1/(va+vb+vc),v=vb*den,w=vc*den;
+    qx=ax+abx*v+acx*w;qy=ay+aby*v+acy*w;qz=az+abz*v+acz*w;
+  }
+  // push sphere (center c = {x,y,z}, radius r) out of the map. Pushes the contact normals onto `contacts` (flat x,y,z list).
+  // Returns how many triangles it had to push away from.
+  function pushOut(c,r,contacts){
+    let hit=0;
+    for(let it=0;it<8;it++){
+      let moved=false;stampN++;
+      const ix0=Math.floor((c.x-r)/CELL),ix1=Math.floor((c.x+r)/CELL),iy0=Math.floor((c.y-r)/CELL),iy1=Math.floor((c.y+r)/CELL),iz0=Math.floor((c.z-r)/CELL),iz1=Math.floor((c.z+r)/CELL);
+      for(let ix=ix0;ix<=ix1;ix++)for(let iy=iy0;iy<=iy1;iy++)for(let iz=iz0;iz<=iz1;iz++){
+        const L=grid.get(key(ix,iy,iz));if(!L)continue;
+        for(let q=0;q<L.length;q++){
+          const t=L[q];if(stamp[t]===stampN)continue;stamp[t]=stampN;
+          closest(c.x,c.y,c.z,t);
+          const dx=c.x-qx,dy=c.y-qy,dz=c.z-qz,d2=dx*dx+dy*dy+dz*dz;
+          if(d2>=r*r)continue;
+          let d=Math.sqrt(d2),nx,ny,nz;
+          if(d>1e-6){nx=dx/d;ny=dy/d;nz=dz/d}
+          else{ // exactly on the surface: use the face normal
+            const o=t*9,ux=T[o+3]-T[o],uy=T[o+4]-T[o+1],uz=T[o+5]-T[o+2],vx=T[o+6]-T[o],vy=T[o+7]-T[o+1],vz=T[o+8]-T[o+2];
+            nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx;const l=Math.hypot(nx,ny,nz)||1;nx/=l;ny/=l;nz/=l;d=0;
+          }
+          const p=r-d;c.x+=nx*p;c.y+=ny*p;c.z+=nz*p;moved=true;hit++;
+          if(contacts)contacts.push(nx,ny,nz);
+        }
+      }
+      if(!moved)break;
+    }
+    return hit;
+  }
+  // is any surface closer than r to this point? (used for "is my hand touching something")
+  function near(x,y,z,r){
+    stampN++;
+    const ix0=Math.floor((x-r)/CELL),ix1=Math.floor((x+r)/CELL),iy0=Math.floor((y-r)/CELL),iy1=Math.floor((y+r)/CELL),iz0=Math.floor((z-r)/CELL),iz1=Math.floor((z+r)/CELL),r2=r*r;
+    for(let ix=ix0;ix<=ix1;ix++)for(let iy=iy0;iy<=iy1;iy++)for(let iz=iz0;iz<=iz1;iz++){
+      const L=grid.get(key(ix,iy,iz));if(!L)continue;
+      for(let q=0;q<L.length;q++){
+        const t=L[q];if(stamp[t]===stampN)continue;stamp[t]=stampN;
+        closest(x,y,z,t);const dx=x-qx,dy=y-qy,dz=z-qz;if(dx*dx+dy*dy+dz*dz<r2)return true;
+      }
+    }
+    return false;
+  }
+  return {setTriangles,pushOut,near,count:()=>N};
+})();
+const MAX_SUBSTEPS=40;
+// move `pos` by (dx,dy,dz), never more than a third of the body radius between collision checks so nothing can tunnel
+function moveBodyAt(pos,dx,dy,dz,Rs,contacts){
+  const len=Math.sqrt(dx*dx+dy*dy+dz*dz),n=Math.min(MAX_SUBSTEPS,Math.max(1,Math.ceil(len/(0.33*Rs))));
+  const sx=dx/n,sy=dy/n,sz=dz/n;
+  for(let i=0;i<n;i++){pos.x+=sx;pos.y+=sy;pos.z+=sz;MapCol.pushOut(pos,Rs,contacts)}
+}
+// remove the part of the velocity that points into the surfaces we touched; tells the caller about the ground
+function bodyResponse(vel,contacts){
+  let ground=false,impact=0,gy=0;
+  for(let i=0;i<contacts.length;i+=3){
+    const nx=contacts[i],ny=contacts[i+1],nz=contacts[i+2],vn=vel.x*nx+vel.y*ny+vel.z*nz;
+    if(vn<0){if(ny>0.5&&-vn>impact)impact=-vn;vel.x-=nx*vn;vel.y-=ny*vn;vel.z-=nz*vn}
+    if(ny>0.5){ground=true;if(ny>gy)gy=ny}
+  }
+  return {ground,impact,gy};
+}
+
+const _contacts=[],_hpos={x:0,y:0,z:0};
+
 // ---------- map mesh collision / ground detection ----------
 // Use the actual triangles from the currently loaded map for ground checks.
 // This avoids relying on a heightfield sampled from the old map model.
@@ -84,6 +190,23 @@ function hgt(x,z,topY=10000){
   groundRaycaster.far=20000;
   const hits=groundRaycaster.intersectObjects(mapCollisionMeshes,true);
   return hits.length ? hits[0].point.y : -Infinity;
+}
+// world-space triangles of the map -> collider
+{
+  const arr=[],a=V(),b=V(),c=V(),e1=V(),e2=V();
+  mapCollisionMeshes.forEach(o=>{
+    for(let p=o;p;p=p.parent)if(p.visible===false)return;
+    const g=o.geometry,pos=g.attributes.position,idx=g.index,m=o.matrixWorld,n=idx?idx.count:pos.count;
+    for(let i=0;i+2<n;i+=3){
+      a.fromBufferAttribute(pos,idx?idx.getX(i):i).applyMatrix4(m);
+      b.fromBufferAttribute(pos,idx?idx.getX(i+1):i+1).applyMatrix4(m);
+      c.fromBufferAttribute(pos,idx?idx.getX(i+2):i+2).applyMatrix4(m);
+      e1.subVectors(b,a);e2.subVectors(c,a);if(e1.cross(e2).lengthSq()<1e-12)continue; // skip degenerate triangles
+      arr.push(a.x,a.y,a.z,b.x,b.y,b.z,c.x,c.y,c.z);
+    }
+  });
+  MapCol.setTriangles(new Float32Array(arr));
+  console.log('map collider ready:',MapCol.count(),'triangles');
 }
 function groundBelow(x,z,referenceY){
   const y=hgt(x,z,referenceY+0.08);
@@ -375,7 +498,7 @@ function stepRemotes(dt){
     const yaw=r.ry-PI;_fw.set(-Math.sin(yaw),0,-Math.cos(yaw));_rt.set(Math.cos(yaw),0,-Math.sin(yaw));
     for(let i=0;i<2;i++){r.h[i].lerp(_tv.set(d.h[i*3],d.h[i*3+1],d.h[i*3+2]),k);
       _pole.set(0,-.6,0).addScaledVector(_rt,i?.6:-.6).addScaledVector(_fw,-.5);ik(r.g,i,r.h[i],_pole)}
-    for(let i=0;i<2;i++){const c=r.h[i].y-RH<hgt(r.h[i].x,r.h[i].z)+0.05,nw=performance.now();
+    for(let i=0;i<2;i++){const c=MapCol.near(r.h[i].x,r.h[i].y,r.h[i].z,RH+0.05),nw=performance.now();
       if(c&&!r.ht[i]&&nw-r.htT[i]>150){r.htT[i]=nw;sfxThump(0.7*distGain(r.pos))}r.ht[i]=c}
     if(r.g.spin)r.g.spin.rotation.y+=dt*25});
 }
@@ -615,7 +738,7 @@ addEventListener('mousemove',e=>{
 // ---------- simulation ----------
 const _o=V(),_p=V(),_dl=V(),disp=V(),gq=new THREE.Quaternion();
 function stepPlayer(dt){
-  P.g.group.scale.setScalar(SIZE);const Rs=R*SIZE,RHs=RH*SIZE;
+  P.g.group.scale.setScalar(SIZE);const Rs=R*SIZE,RHs=RH*SIZE;_contacts.length=0;
   const act=[btn[0]||key.KeyQ,btn[2]||key.KeyE];
   // Desktop walking controls: WASD moves relative to the direction you're looking.
   const forward=(key.KeyW?1:0)-(key.KeyS?1:0);
@@ -623,8 +746,7 @@ function stepPlayer(dt){
   if(forward||strafe){
     const mag=Math.hypot(forward,strafe);
     const speed=5.5*SIZE*dt/mag;
-    P.pos.x+=(-Math.sin(P.yaw)*forward+Math.cos(P.yaw)*strafe)*speed;
-    P.pos.z+=(-Math.cos(P.yaw)*forward-Math.sin(P.yaw)*strafe)*speed;
+    moveBodyAt(P.pos,(-Math.sin(P.yaw)*forward+Math.cos(P.yaw)*strafe)*speed,0,(-Math.cos(P.yaw)*forward-Math.sin(P.yaw)*strafe)*speed,Rs,_contacts);
   }
   const kx=(key.ArrowRight?1:0)-(key.ArrowLeft?1:0),ky=(key.ArrowUp?1:0)-(key.ArrowDown?1:0);
   if(!act[0]&&!act[1]){P.yaw-=kx*2*dt;P.pitch=Math.max(-1.4,Math.min(1.4,P.pitch+ky*2*dt))}
@@ -638,23 +760,33 @@ function stepPlayer(dt){
   for(let k=0;k<2;k++){
     armOffset(P.g,k,P.a[k],P.b[k],off[k]);ow[k].copy(off[k]).applyQuaternion(gq).multiplyScalar(SIZE);
     _p.copy(P.prev[k]).applyQuaternion(gq).multiplyScalar(SIZE);_dl.subVectors(ow[k],_p);
-    const wx=P.pos.x+ow[k].x,wy=P.pos.y+ow[k].y,wz=P.pos.z+ow[k].z,h=groundBelow(wx,wz,wy);
-    if(wy-RHs<h+0.03){disp.sub(_dl);touching=true;P.touch[k]=true;handHit(k,_dl.length()/dt)}else{P.touch[k]=false;P.ht[k]=false}
+    const wx=P.pos.x+ow[k].x,wy=P.pos.y+ow[k].y,wz=P.pos.z+ow[k].z;
+    if(MapCol.near(wx,wy,wz,RHs+0.03)){disp.sub(_dl);touching=true;P.touch[k]=true;handHit(k,_dl.length()/dt)}else{P.touch[k]=false;P.ht[k]=false}
     P.prev[k].copy(off[k]);
   }
   if(touching){
-    P.pos.add(disp);
-    for(let k=0;k<2;k++)if(P.touch[k]){const wy=P.pos.y+ow[k].y,h=groundBelow(P.pos.x+ow[k].x,P.pos.z+ow[k].z,wy);if(wy-RHs<h)P.pos.y+=h+RHs-wy}
+    moveBodyAt(P.pos,disp.x,disp.y,disp.z,Rs,_contacts);
+    for(let k=0;k<2;k++)if(P.touch[k]){ // a hand that sank into a surface pushes the body back out (body collision still gets the last word)
+      _hpos.x=P.pos.x+ow[k].x;_hpos.y=P.pos.y+ow[k].y;_hpos.z=P.pos.z+ow[k].z;const hx=_hpos.x,hy=_hpos.y,hz=_hpos.z;
+      MapCol.pushOut(_hpos,RHs,null);
+      let cx=_hpos.x-hx,cy=_hpos.y-hy,cz=_hpos.z-hz;const cl=Math.hypot(cx,cy,cz),mx=0.3*SIZE;
+      if(cl>mx){const f=mx/cl;cx*=f;cy*=f;cz*=f}
+      if(cl>0)moveBodyAt(P.pos,cx,cy,cz,Rs,_contacts);
+    }
     P.hist.push(disp.clone().divideScalar(dt));if(P.hist.length>5)P.hist.shift();
     P.vel.set(0,0,0);P.hist.forEach(v=>P.vel.add(v));P.vel.divideScalar(P.hist.length);
     if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE));
   }else{
     if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE));whooshSfx(P.vel.length())}
-    P.hist=[];P.vel.y-=GRAV*SIZE*dt;P.pos.addScaledVector(P.vel,dt);
+    P.hist=[];P.vel.y-=GRAV*SIZE*dt;
+    {const sp=P.vel.length(),cap=60*SIZE;if(sp>cap)P.vel.multiplyScalar(cap/sp)}
+    moveBodyAt(P.pos,P.vel.x*dt,P.vel.y*dt,P.vel.z*dt,Rs,_contacts);
   }
   P.was=touching;
-  const h=groundBelow(P.pos.x,P.pos.z,P.pos.y+Rs);
-  if(P.pos.y-Rs<h){P.pos.y=h+Rs;if(P.vel.y<-4&&!touching)landSfx(-P.vel.y);if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
+  moveBodyAt(P.pos,0,0,0,Rs,_contacts); // final settle: the body always ends the frame outside the map geometry
+  {const cr=bodyResponse(P.vel,_contacts);
+    if(cr.ground&&!touching){if(cr.impact>4)landSfx(cr.impact);const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f;
+      if(cr.gy>0.7&&P.vel.length()<1.5)P.vel.set(0,0,0)}} // come to rest on ground instead of creeping down slopes
   if(Math.abs(P.pos.x)>68){P.pos.x=Math.sign(P.pos.x)*68;P.vel.x=0}
   if(Math.abs(P.pos.z)>68){P.pos.z=Math.sign(P.pos.z)*68;P.vel.z=0}
   P.g.group.position.copy(P.pos);P.g.group.updateMatrixWorld(true);
@@ -699,25 +831,35 @@ function stepVR(dt){
     P.touch[k]=false;const bh=byHand[k];if(!bh){vrPrev[k]=null;continue}
     w[k]=rig.localToWorld(bh.grip.position.clone());const ow=w[k].clone().sub(hp);
     if(!vrPrev[k])vrPrev[k]=ow.clone();
-    const h=groundBelow(w[k].x,w[k].z,w[k].y);
-    if(w[k].y-RHs<h+0.03){disp.sub(ow.clone().sub(vrPrev[k]));touching=true;P.touch[k]=true;handHit(k,ow.clone().sub(vrPrev[k]).length()/dt)}else P.ht[k]=false;
+    if(MapCol.near(w[k].x,w[k].y,w[k].z,RHs+0.03)){disp.sub(ow.clone().sub(vrPrev[k]));touching=true;P.touch[k]=true;handHit(k,ow.clone().sub(vrPrev[k]).length()/dt)}else P.ht[k]=false;
     vrPrev[k].copy(ow);
   }
   const mv=V();
   if(touching){
     mv.copy(disp);
-    for(let k=0;k<2;k++)if(P.touch[k]){const wy=w[k].y+mv.y,h=groundBelow(w[k].x+mv.x,w[k].z+mv.z,wy);if(wy-RHs<h)mv.y+=h+RHs-wy}
+    for(let k=0;k<2;k++)if(P.touch[k]){
+      _hpos.x=w[k].x+mv.x;_hpos.y=w[k].y+mv.y;_hpos.z=w[k].z+mv.z;const hx=_hpos.x,hy=_hpos.y,hz=_hpos.z;
+      MapCol.pushOut(_hpos,RHs,null);
+      let cx=_hpos.x-hx,cy=_hpos.y-hy,cz=_hpos.z-hz;const cl=Math.hypot(cx,cy,cz),mxc=0.3*SIZE;
+      if(cl>mxc){const f=mxc/cl;cx*=f;cy*=f;cz*=f}
+      mv.x+=cx;mv.y+=cy;mv.z+=cz;
+    }
     P.hist.push(mv.clone().divideScalar(dt));if(P.hist.length>5)P.hist.shift();
     P.vel.set(0,0,0);P.hist.forEach(v=>P.vel.add(v));P.vel.divideScalar(P.hist.length);
     if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE));
   }else{
     if(P.was){P.vel.multiplyScalar(1.12);if(P.vel.length()>(MAXV*SIZE))P.vel.setLength((MAXV*SIZE));whooshSfx(P.vel.length())}
-    P.hist=[];P.vel.y-=GRAV*SIZE*dt;mv.copy(P.vel).multiplyScalar(dt);
+    P.hist=[];P.vel.y-=GRAV*SIZE*dt;
+    {const sp=P.vel.length(),cap=60*SIZE;if(sp>cap)P.vel.multiplyScalar(cap/sp)}
+    mv.copy(P.vel).multiplyScalar(dt);
   }
   P.was=touching;
-  const pn=pb.clone().add(mv),h=groundBelow(pn.x,pn.z,pn.y+Rs);
-  if(pn.y-Rs<h){mv.y+=h+Rs-pn.y;if(P.vel.y<-4&&!touching)landSfx(-P.vel.y);if(P.vel.y<0)P.vel.y=0;if(!touching){const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f}}
-  pn.copy(pb).add(mv);
+  _contacts.length=0;
+  {const bp=pb.clone();moveBodyAt(bp,mv.x,mv.y,mv.z,Rs,_contacts);mv.copy(bp).sub(pb)}
+  {const cr=bodyResponse(P.vel,_contacts);
+    if(cr.ground&&!touching){if(cr.impact>4)landSfx(cr.impact);const f=Math.max(0,1-5*dt);P.vel.x*=f;P.vel.z*=f;
+      if(cr.gy>0.7&&P.vel.length()<1.5)P.vel.set(0,0,0)}}
+  const pn=pb.clone().add(mv);
   if(Math.abs(pn.x)>68){mv.x+=Math.sign(pn.x)*68-pn.x;P.vel.x=0}
   if(Math.abs(pn.z)>68){mv.z+=Math.sign(pn.z)*68-pn.z;P.vel.z=0}
   rig.position.add(mv);P.pos.copy(pb).add(mv);
