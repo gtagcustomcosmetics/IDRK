@@ -1111,15 +1111,41 @@ function photo(){
   renderCam();flash=.18;
   cv2.toBlob(b=>{if(b)saveFile(b,'monke-photo-'+Date.now()+'.jpg')},'image/jpeg',.92);
 }
-function toggleRec(){
-  if(!cst.rec){
-    const mime=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m));
-    if(!mime)return;
-    chunks=[];mr=new MediaRecorder(cv2.captureStream(30),{mimeType:mime,videoBitsPerSecond:5e6});
-    mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
-    mr.onstop=()=>{const ty=mime.split(';')[0];saveFile(new Blob(chunks,{type:ty}),'monke-clip-'+Date.now()+'.'+(ty.includes('mp4')?'mp4':'webm'))};
+async function toggleRec(){
+  if(cst.rec){
+    if(mr&&mr.state!=='inactive')mr.stop();
+    cst.rec=false;
+    return;
+  }
+  // A canvas capture contains video only. Explicitly add the game's microphone
+  // audio stream so every saved clip is recorded with sound when available.
+  if(!window.MediaRecorder||!cv2.captureStream){alert('Video recording is not supported by this browser.');return;}
+  const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4'].find(m=>MediaRecorder.isTypeSupported(m));
+  if(!mime){alert('This browser does not support a compatible recording format.');return;}
+  try{
+    resumeAudio();
+    await getMic();
+    const videoStream=cv2.captureStream(30);
+    const recordingStream=new MediaStream(videoStream.getVideoTracks());
+    // Use the same audio destination as voice chat, so the mic mute toggle is respected.
+    const audioTrack=outDest.stream.getAudioTracks()[0];
+    if(audioTrack)recordingStream.addTrack(audioTrack);
+    if(!audioTrack)throw new Error('Microphone audio track is unavailable');
+    chunks=[];
+    mr=new MediaRecorder(recordingStream,{mimeType:mime,videoBitsPerSecond:5e6});
+    mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+    mr.onerror=()=>{cst.rec=false;alert('Recording ran into an error. Please try again.');};
+    mr.onstop=()=>{
+      const ty=mime.split(';')[0];
+      if(chunks.length)saveFile(new Blob(chunks,{type:ty}),'monke-clip-'+Date.now()+'.'+(ty.includes('mp4')?'mp4':'webm'));
+      videoStream.getTracks().forEach(t=>t.stop());
+      cst.rec=false;
+    };
     mr.start(1000);cst.rec=true;
-  }else{mr.stop();cst.rec=false}
+  }catch(e){
+    cst.rec=false;
+    alert('Could not start recording with microphone audio. Check your browser microphone permission and try again.');
+  }
 }
 function press(id){
   if(id==='photo')photo();else if(id==='rec')toggleRec();
