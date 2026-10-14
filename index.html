@@ -889,22 +889,16 @@ function stepVR(dt){
   rig.position.add(tpOff);
 }
 // ---------- VR menu: dedicated left-controller menu button ----------
-const MW=512,MH=1600,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
+const MW=512,MH=420,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
 menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
-// Stick offsets are relative to the right wrist. Click the left/right half of a tuning row to decrease/increase it.
-const stickTune={x:0,y:-0.08,z:0.04,rx:0,ry:0,rz:0,scale:0.01};
-const tuneDefs=[
-  ['x','Stick X',0.01,-1,1,3],['y','Stick Y',0.01,-1,1,3],['z','Stick Z',0.01,-1,1,3],
-  ['rx','Rotation X',0.1,-Math.PI,Math.PI,2],['ry','Rotation Y',0.1,-Math.PI,Math.PI,2],['rz','Rotation Z',0.1,-Math.PI,Math.PI,2],
-  ['scale','Stick scale',0.001,0.001,0.1,4]
-];
-const menuIds=['mic','hear','sfx','turn','mode',...tuneDefs.flatMap(d=>['tune:'+d[0]+'-minus','tune:'+d[0]+'-normal','tune:'+d[0]+'-plus']),'copy','close'];
+// Fixed stick transform: the tuning controls have been removed.
+const stickTune={x:-0.03,y:0.09,z:-0.04,rx:1.6,ry:1.9,rz:1.8,scale:0.01};
+const menuIds=['mic','hear','sfx','turn','mode','close'];
 const MBTN=menuIds.map((id,i)=>({id,x:40,y:64+i*52,w:432,h:44}));
 let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
-function stickConfigText(){return 'stickTune: '+JSON.stringify({position:{x:+stickTune.x.toFixed(3),y:+stickTune.y.toFixed(3),z:+stickTune.z.toFixed(3)},rotation:{x:+stickTune.rx.toFixed(3),y:+stickTune.ry.toFixed(3),z:+stickTune.rz.toFixed(3)},scale:+stickTune.scale.toFixed(4)})}
 function applyStickTune(){
   if(!handCosmetic)return;
   handCosmetic.position.set(stickTune.x,stickTune.y,stickTune.z);
@@ -912,11 +906,11 @@ function applyStickTune(){
   handCosmetic.scale.setScalar(stickTune.scale);
 }
 function drawMenu(){
-  const key=menuHover+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost()+'|'+JSON.stringify(stickTune);
+  const key=menuHover+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost();
   if(key===menuDrawKey)return;menuDrawKey=key;
   const x=menuCx;x.clearRect(0,0,MW,MH);
   x.fillStyle='rgba(0,0,0,.88)';rr(0,0,MW,MH,28);x.fill();
-  x.fillStyle='#fff';x.font='bold 30px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU / STICK TUNING',MW/2,43);
+  x.fillStyle='#fff';x.font='bold 30px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,43);
   MBTN.forEach((b,i)=>{
     let col='#555',txt='Close menu',fg='#fff';
     if(b.id==='mic'){col=micOn?'#3ecf6a':'#d9534f';fg=micOn?'#000':'#fff';txt='Mic: '+(micOn?(micOK===false?'ON (no mic)':'ON'):'OFF')}
@@ -924,56 +918,19 @@ function drawMenu(){
     else if(b.id==='sfx'){col=sfxOn?'#3ecf6a':'#d9534f';fg=sfxOn?'#000':'#fff';txt='Sounds: '+(sfxOn?'ON':'OFF')}
     else if(b.id==='turn'){col=turnMode?'#3b82f6':'#666';txt='Turning: '+TURN_NAMES[turnMode]}
     else if(b.id==='mode'){col=isHost()?'#b45309':'#444';txt='Game mode: '+(game.mode==='tag'?'TAG':'CASUAL')+(isHost()?'':' (host only)')}
-    else if(b.id.startsWith('tune:')){
-      const match=b.id.match(/^tune:(.+)-(minus|normal|plus)$/),d=tuneDefs.find(d=>d[0]===match[1]),v=stickTune[d[0]],action=match[2];
-      col=action==='normal'?'#b58b2a':'#31546b';
-      const value=d[5]===2?v.toFixed(2):v.toFixed(d[5]);
-      txt=d[1]+' '+(action==='minus'?'− step':action==='normal'?'NORMAL':' + step')+'  |  '+value;
-    }
-    else if(b.id==='copy'){col='#e6b93d';fg='#111';txt='COPY STICK CONFIG'}
-    else if(b.id==='close'){col='#666';txt='CLOSE MENU'}
     x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
     if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
     x.fillStyle=fg;x.font='bold 19px system-ui,sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+6);
   });
   menuTex.needsUpdate=true;
 }
-const ctrls=[0,1].map(i=>renderer.xr.getController(i));
-const lasers=ctrls.map(c=>{const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(),V(0,0,-1)]),new THREE.LineBasicMaterial({color:0xffd54a,fog:false}));l.visible=false;c.add(l);return l});
-const _rc=new THREE.Raycaster(),_mo=V(),_md=V(),_mq=new THREE.Quaternion();
-function setMenu(on){
-  if(on===menuOpen)return;menuOpen=on;menuG.visible=on;lasers.forEach(l=>l.visible=on);
-  if(!on)return;
-  const xc=renderer.xr.getCamera();rig.localToWorld(_mo.copy(xc.position));_mq.copy(rig.quaternion).multiply(xc.quaternion);
-  _md.set(0,0,-1).applyQuaternion(_mq);_md.y=0;if(_md.lengthSq()<1e-4)_md.set(0,0,-1);_md.normalize();
-  menuG.position.copy(_mo).addScaledVector(_md,1);menuG.position.y=_mo.y-0.05;
-  menuG.lookAt(_mo.x,menuG.position.y,_mo.z);menuG.updateMatrixWorld(true);
-  menuHover=-1;menuDrawKey='';drawMenu();
-}
-const pulse=gp=>{try{const a=gp&&gp.hapticActuators&&gp.hapticActuators[0];if(a&&a.pulse)a.pulse(0.4,40)}catch(e){}};
-function menuClick(id,uvX=0.5){
+function menuClick(id){
   if(id==='mic')setMic(!micOn);
   else if(id==='hear')setHear(!hearOn);
   else if(id==='sfx'){setSfx(!sfxOn);if(sfxOn)sfxClick()}
   else if(id==='turn'){turnMode=(turnMode+1)%3;vrSnap=false;try{localStorage.setItem('monkeTurn',turnMode)}catch(e){}}
   else if(id==='mode'){if(isHost())hostSetMode(game.mode==='tag'?'free':'tag')}
-  else if(id.startsWith('tune:')){
-    const match=id.match(/^tune:(.+)-(minus|normal|plus)$/);if(!match)return;
-    const d=tuneDefs.find(d=>d[0]===match[1]);if(!d)return;
-    const action=match[2];
-    if(action==='normal'){
-      stickTune[d[0]]=d[0]==='y'?-0.08:d[0]==='z'?0.04:d[0]==='scale'?0.01:0;
-    }else{
-      const dir=action==='minus'?-1:1;
-      stickTune[d[0]]=Math.max(d[3],Math.min(d[4],stickTune[d[0]]+d[2]*dir));
-    }
-    applyStickTune();menuDrawKey='';
-  }else if(id==='copy'){
-    const txt=stickConfigText();
-    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).catch(()=>prompt('Copy this stick config:',txt));
-    else prompt('Copy this stick config:',txt);
-    menuDrawKey='';
-  }else if(id==='close')setMenu(false);
+  else if(id==='close')setMenu(false);
 }
 function vrMenuTick(dt){
   if(!renderer.xr.isPresenting){if(menuOpen)setMenu(false);return}
@@ -997,7 +954,7 @@ function vrMenuTick(dt){
       const localHit=menuMesh.worldToLocal(h.point.clone());
       const px=(localHit.x+0.5)*MW,py=MH/2-localHit.y*MW;
       const bi=MBTN.findIndex(b=>px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h);
-      if(bi>=0){hov=bi;if(press){pulse(gp);menuClick(MBTN[bi].id,(px-MBTN[bi].x)/MBTN[bi].w);if(!menuOpen)return}}
+      if(bi>=0){hov=bi;if(press){pulse(gp);menuClick(MBTN[bi].id);if(!menuOpen)return}}
     }
     lasers[i].scale.z=len;
   }
