@@ -36,7 +36,7 @@ import {FBXLoader} from 'three/addons/loaders/FBXLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
 
 // Load Utopium before drawing canvas-based UI text.
-await document.fonts.load('16px Utopium');
+try { await document.fonts.load('16px Utopium'); } catch (fontError) { console.warn('Utopium font failed to load; using fallback font.', fontError); }
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 
@@ -233,15 +233,33 @@ function makeGorilla(){
   model.traverse(o=>{if(o.isMesh||o.isSkinnedMesh){o.frustumCulled=false;o.material=o.material.clone();meshes.push(o)}
     // Support both the original UpperArmL/LowerArmL/WristL rig and the
     // updated Gorilla Tag rig (upper_arm.L / forearm.L / hand.L).
-    const n=o.name.toLowerCase().replace(/[^a-z0-9]/g,'');
-    if(n.startsWith('upperarml')||n==='upperarml')rig.upper[0]=o;
-    if(n.startsWith('upperarmr')||n==='upperarmr')rig.upper[1]=o;
-    if(o.isBone&&n==='head')rig.head=o;
-    if(n.startsWith('lowerarml')||n==='forearml')rig.lower[0]=o;
-    if(n.startsWith('lowerarmr')||n==='forearmr')rig.lower[1]=o;
-    if(n.startsWith('wristl')||n==='handl')rig.wrist[0]=o;
-    if(n.startsWith('wristr')||n==='handr')rig.wrist[1]=o;});
+    const raw=o.name.toLowerCase();
+    const n=raw.replace(/[^a-z0-9]/g,'');
+    // Accept common Blender, Mixamo, and Gorilla-style left/right bone names.
+    const side = /(^|[^a-z])(l|left)([^a-z]|$)/.test(raw) || /left/.test(raw) || /l$/.test(n);
+    const right = /(^|[^a-z])(r|right)([^a-z]|$)/.test(raw) || /right/.test(raw) || /r$/.test(n);
+    if(/upperarm|armupper|uparm|shoulderarm/.test(n) && !/lower|fore|twist|roll/.test(n)) { if(side) rig.upper[0]=o; else if(right) rig.upper[1]=o; }
+    if(o.isBone && /(^|[^a-z])head([^a-z]|$)/.test(raw))rig.head=o;
+    if(/lowerarm|forearm|armlower|loarm/.test(n) && !/twist|roll/.test(n)) { if(side) rig.lower[0]=o; else if(right) rig.lower[1]=o; }
+    if(/wrist|hand/.test(n) && !/finger|thumb|index|middle|ring|pinky/.test(n)) { if(side) rig.wrist[0]=o; else if(right) rig.wrist[1]=o; }
+  });
   group.updateMatrixWorld(true);
+  const missing=[];
+  for(let k=0;k<2;k++){
+    const label=k===0?'left':'right';
+    if(!rig.upper[k])missing.push(label+' upper arm');
+    if(!rig.lower[k])missing.push(label+' lower arm/forearm');
+    if(!rig.wrist[k])missing.push(label+' wrist/hand');
+  }
+  if(!rig.head) missing.push('head bone');
+  if(missing.length){
+    const names=[]; model.traverse(o=>{if(o.isBone)names.push(o.name)});
+    $('msg').innerHTML='<b>Player rig bones were not recognized.</b><br>Missing: '+missing.join(', ')+
+      '<br><br>Detected bones: '+(names.length?names.join(', '):'No skeleton bones found')+
+      '<br><br>Keep this page open and send me this list so I can map your original rig correctly.';
+    $('help').style.display='flex';
+    throw new Error('Unrecognized player rig. Missing: '+missing.join(', ')+'. Bones: '+names.join(', '));
+  }
   for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w);const l=rig.lower[k].getWorldPosition(V());rig.lu[k]=s.distanceTo(l);rig.ll[k]=l.distanceTo(w)}
   let fm=meshes.filter(o=>FUR_MATCH.test(o.material.name));
   if(!fm.length)fm=[meshes.reduce((a,b)=>b.geometry.attributes.position.count>a.geometry.attributes.position.count?b:a)];
@@ -296,7 +314,7 @@ function handRot(g,k,cq){
 }
 // ---------- player ----------
 const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],ht:[false,false],htT:[0,0],hist:[],third:false,was:false};
-function reset(){P.pos.set(0,0,0);const floorY=hgt(0,0);P.pos.y=(Number.isFinite(floorY)?floorY:0)+(R+0.2)*SIZE;P.vel.set(0,0,0);P.hist=[];
+function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+(R+0.2)*SIZE;P.vel.set(0,0,0);P.hist=[];
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
 
