@@ -296,7 +296,7 @@ function handRot(g,k,cq){
 }
 // ---------- player ----------
 const P={g:makeGorilla(),pos:V(),vel:V(),yaw:0,pitch:0,a:[0,0],b:[.15,.15],prev:[V(),V()],touch:[false,false],ht:[false,false],htT:[0,0],hist:[],third:false,was:false};
-function reset(){P.pos.set(0,0,0);P.pos.y=hgt(0,0)+(R+0.2)*SIZE;P.vel.set(0,0,0);P.hist=[];
+function reset(){P.pos.set(0,0,0);const floorY=hgt(0,0);P.pos.y=(Number.isFinite(floorY)?floorY:0)+(R+0.2)*SIZE;P.vel.set(0,0,0);P.hist=[];
   for(let k=0;k<2;k++)armOffset(P.g,k,P.a[k],P.b[k],P.prev[k])}
 reset();
 
