@@ -893,13 +893,13 @@ function stepVR(dt){
   rig.position.add(tpOff);
 }
 // ---------- VR menu: dedicated left-controller menu button ----------
-const MW=512,MH=420,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
+const MW=512,MH=472,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
 menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
 // Fixed stick transform: the tuning controls have been removed.
 const stickTune={x:-0.03,y:0.09,z:-0.04,rx:1.6,ry:1.9,rz:1.8,scale:0.01};
-const menuIds=['mic','hear','sfx','turn','mode','close'];
+const menuIds=['mic','hear','sfx','turn','mode','cam','close'];
 const MBTN=menuIds.map((id,i)=>({id,x:40,y:64+i*52,w:432,h:44}));
 let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
@@ -922,6 +922,7 @@ function drawMenu(){
     else if(b.id==='sfx'){col=sfxOn?'#3ecf6a':'#d9534f';fg=sfxOn?'#000':'#fff';txt='Sounds: '+(sfxOn?'ON':'OFF')}
     else if(b.id==='turn'){col=turnMode?'#3b82f6':'#666';txt='Turning: '+TURN_NAMES[turnMode]}
     else if(b.id==='mode'){col=isHost()?'#b45309':'#444';txt='Game mode: '+(game.mode==='tag'?'TAG':'CASUAL')+(isHost()?'':' (host only)')}
+    else if(b.id==='cam'){col='#8b5cf6';txt='Bring camera to me'}
     x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
     if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
     x.fillStyle=fg;x.font='bold 19px Utopium, sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+6);
@@ -947,6 +948,7 @@ function menuClick(id){
   else if(id==='sfx'){setSfx(!sfxOn);if(sfxOn)sfxClick()}
   else if(id==='turn'){turnMode=(turnMode+1)%3;vrSnap=false;try{localStorage.setItem('monkeTurn',turnMode)}catch(e){}}
   else if(id==='mode'){if(isHost())hostSetMode(game.mode==='tag'?'free':'tag')}
+  else if(id==='cam'){camBring();setMenu(false)}
   else if(id==='close')setMenu(false);
 }
 function vrMenuTick(dt){
@@ -981,12 +983,199 @@ renderer.xr.addEventListener('sessionend',()=>setMenu(false));
 renderer.xr.addEventListener('sessionstart',()=>{mArm=false;mPrevReq=false;const ss=renderer.xr.getSession();if(ss)ss.addEventListener('visibilitychange',()=>{mArm=false;mPrevReq=false;setMenu(false)})});
 ctrls.forEach(c=>{c.addEventListener('connected',()=>{mArm=false;mPrevReq=false});c.addEventListener('disconnected',()=>{mArm=false;mPrevReq=false})});
 
+// ---------- Camera rig (ported from Gorilla Cam Lab) ----------
+// Grab with GRIP next to a handle (both handles = two-hand hold). Let go and it floats like a tripod.
+// Buttons are pressed with the hand LASER + TRIGGER, same as the menu. While holding: TRIGGER = photo, right stick up/down = FOV.
+let camTick=()=>{},camBring=()=>{};
+{
+const HX=.31,MODES=['THIRD','FIRST','SELFIE'],CS=VS;
+const cst={mode:0,fov:70,rec:false};
+const A=V(),B=V(),X=V(),Y=V(),Z=V(),U1=V(),U2=V(),TS=V(),Q=new THREE.Quaternion(),MM=new THREE.Matrix4();
+const r2=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});r2.setSize(960,540,false);
+const cv2=r2.domElement;
+const tex=new THREE.CanvasTexture(cv2);tex.minFilter=THREE.LinearFilter;tex.generateMipmaps=false;tex.colorSpace=THREE.SRGBColorSpace;
+const cm=new THREE.Group();cm.scale.setScalar(CS);cm.visible=false;scene.add(cm);
+const dark=new THREE.MeshStandardMaterial({color:0x22262e,roughness:.5});
+const body=new THREE.Mesh(new THREE.BoxGeometry(.54,.4,.06),dark);cm.add(body);
+const lens=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,.05,20),new THREE.MeshStandardMaterial({color:0x0a0a0a,metalness:.6,roughness:.2}));
+lens.rotation.x=Math.PI/2;lens.position.set(0,.03,-.045);cm.add(lens);
+[-1,1].forEach(s=>{const hd=new THREE.Mesh(new THREE.CylinderGeometry(.022,.022,.18,14),new THREE.MeshStandardMaterial({color:s>0?0xff5a5a:0x4c7dff,roughness:.4}));hd.position.x=s*HX;cm.add(hd)});
+const screen=new THREE.Mesh(new THREE.PlaneGeometry(.46,.259),new THREE.MeshBasicMaterial({map:tex,side:THREE.DoubleSide,fog:false}));
+screen.position.set(0,.03,.033);cm.add(screen);
+const flashM=new THREE.Mesh(new THREE.PlaneGeometry(.46,.259),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,fog:false}));
+flashM.position.set(0,.03,.0345);flashM.visible=false;cm.add(flashM);
+function label(w,h,px,py,font){
+  const c=document.createElement('canvas');c.width=px;c.height=py;const x=c.getContext('2d'),t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:t,fog:false}));
+  m.draw=(txt,bg,fg)=>{x.fillStyle=bg;x.fillRect(0,0,px,py);x.fillStyle=fg;x.font=font;x.textAlign='center';x.textBaseline='middle';x.fillText(txt,px/2,py/2);t.needsUpdate=true};
+  return m;
+}
+const info=label(.46,.04,460,40,'bold 24px sans-serif');info.position.set(0,.18,.033);cm.add(info);
+const buttons=[['photo','PHOTO'],['rec','REC'],['mode','MODE'],['flip','FLIP'],['fovm','FOV-'],['fovp','FOV+']].map((d,i)=>{
+  const b=label(.065,.05,130,100,'bold 30px sans-serif');b.position.set((i-2.5)*.075,-.15,.035);
+  b.userData={id:d[0],txt:d[1],t:0,k:''};cm.add(b);return b;
+});
+const hitObjs=[body,...buttons];
+let infoKey='';
+function ui(){
+  buttons.forEach(b=>{const u=b.userData,on=u.t>0||(u.id==='rec'&&cst.rec)||(u.id==='flip'&&cst.mode===2),txt=u.id==='rec'&&cst.rec?'STOP':u.txt,k=txt+on;
+    if(k!==u.k){u.k=k;b.draw(txt,on?(u.id==='rec'?'#d11a2a':'#2a9df4'):'#2a3140','#fff')}});
+  const t=MODES[cst.mode]+'   FOV '+Math.round(cst.fov)+'°'+(cst.rec?'   ● REC':'');
+  if(t!==infoKey){infoKey=t;info.draw(t,'#10131a','#9ee7ff')}
+}
+
+/* ---- hands / grabbing ---- */
+const buzz=(h,a,ms)=>{try{const g=h.src&&h.src.gamepad,p=g&&g.hapticActuators&&g.hapticActuators[0];if(p&&p.pulse)p.pulse(a,ms)}catch(e){}};
+const hs=[0,1].map(i=>{
+  const h={ctrl:ctrls[i],grip:grips[i],src:null,hold:null,off:new THREE.Matrix4(),prevTrig:false};
+  h.ctrl.addEventListener('connected',e=>{h.src=e.data});
+  h.ctrl.addEventListener('disconnected',()=>{h.src=null;h.hold=null});
+  h.ctrl.addEventListener('squeezestart',()=>grab(h));
+  h.ctrl.addEventListener('squeezeend',()=>release(h));
+  return h;
+});
+function grab(h){
+  if(h.hold||!renderer.xr.isPresenting||!cm.visible)return;
+  rig.updateMatrixWorld(true);cm.updateMatrixWorld(true);h.grip.getWorldPosition(A);
+  let best=0,bd=.14*CS;
+  for(const s of [-1,1]){
+    if(hs.some(o=>o.hold&&o.hold.side===s))continue;
+    const d=A.distanceTo(cm.localToWorld(B.set(s*HX,0,0)));if(d<bd){bd=d;best=s}
+  }
+  if(best){h.hold={side:best};h.off.copy(h.grip.matrixWorld).invert().multiply(cm.matrixWorld);buzz(h,.6,60)}
+}
+function release(h){
+  h.hold=null;rig.updateMatrixWorld(true);
+  const o=hs.find(k=>k.hold);if(o)o.off.copy(o.grip.matrixWorld).invert().multiply(cm.matrixWorld);
+}
+function updateCam(){
+  const hh=hs.filter(h=>h.hold);
+  if(hh.length===1){MM.multiplyMatrices(hh[0].grip.matrixWorld,hh[0].off);MM.decompose(cm.position,cm.quaternion,TS)}
+  else if(hh.length===2){
+    const R=hh.find(h=>h.hold.side>0),L=hh.find(h=>h.hold.side<0);
+    R.grip.getWorldPosition(A);L.grip.getWorldPosition(B);
+    X.subVectors(A,B).normalize();
+    U1.set(0,1,0).applyQuaternion(R.grip.getWorldQuaternion(Q));U2.set(0,1,0).applyQuaternion(L.grip.getWorldQuaternion(Q));
+    Y.set(0,2,0).add(U1).add(U2);
+    Z.crossVectors(X,Y).normalize();Y.crossVectors(Z,X);
+    MM.makeBasis(X,Y,Z);cm.quaternion.setFromRotationMatrix(MM);cm.position.addVectors(A,B).multiplyScalar(.5);
+  }
+  cm.updateMatrixWorld(true);
+}
+
+/* ---- head pose + spawn ---- */
+const hq=new THREE.Quaternion(),hp=V();let placed=false;
+function headPose(){const xc=renderer.xr.getCamera();rig.localToWorld(hp.copy(xc.position));hq.copy(rig.quaternion).multiply(xc.quaternion)}
+function placeCam(){
+  B.set(0,0,-1).applyQuaternion(hq);B.y=0;if(B.lengthSq()<1e-4)B.set(0,0,-1);B.normalize();
+  cm.position.set(hp.x+B.x*1.26,hp.y-.35,hp.z+B.z*1.26);
+  cm.lookAt(cm.position.x-B.x,cm.position.y,cm.position.z-B.z); // screen faces you, lens faces away
+  cm.updateMatrixWorld(true);hs.forEach(h=>h.hold=null);
+}
+camBring=()=>{rig.updateMatrixWorld(true);headPose();placeCam()};
+
+/* ---- camera view / photo / record ---- */
+const c2=new THREE.PerspectiveCamera(70,16/9,.05,500),qFlip=new THREE.Quaternion().setFromAxisAngle(V(0,1,0),Math.PI);
+function renderCam(){
+  if(cst.mode===1){c2.position.copy(hp);c2.quaternion.copy(hq)}
+  else{c2.position.copy(cm.localToWorld(A.set(0,.03,cst.mode===2?.04:-.04)));c2.quaternion.copy(cm.quaternion);if(cst.mode===2)c2.quaternion.multiply(qFlip)}
+  c2.fov=cst.fov;c2.updateProjectionMatrix();
+  const hv=hudPlane.visible,mv=menuG.visible,lv=lasers.map(l=>l.visible);
+  cm.visible=false;menuG.visible=false;hudPlane.visible=false;lasers.forEach(l=>l.visible=false);
+  r2.render(scene,c2);
+  cm.visible=true;menuG.visible=mv;hudPlane.visible=hv;lasers.forEach((l,i)=>l.visible=lv[i]);
+  tex.needsUpdate=true;
+}
+/* captures list (page overlay) + save */
+const gb=document.createElement('button');gb.textContent='📷 Captures';
+gb.style.cssText='position:fixed;left:16px;bottom:16px;z-index:30;padding:8px 12px;border:0;border-radius:8px;background:#000b;color:#fff;font:14px system-ui,sans-serif;cursor:pointer;display:none';
+const gal=document.createElement('div');
+gal.style.cssText='position:fixed;left:16px;bottom:56px;z-index:30;width:min(520px,90vw);max-height:60vh;overflow:auto;background:#000d;border-radius:12px;padding:10px;display:none;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;color:#fff;font:13px system-ui,sans-serif';
+gb.onclick=()=>{gal.style.display=gal.style.display==='grid'?'none':'grid'};
+document.body.append(gb,gal);
+const dbp=new Promise(res=>{try{const r=indexedDB.open('gcam',1);r.onupgradeneeded=()=>r.result.createObjectStore('f',{keyPath:'name'});r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)}catch(e){res(null)}});
+function addItem(blob,name){
+  const url=URL.createObjectURL(blob),d=document.createElement('div'),vid=blob.type.startsWith('video');
+  d.innerHTML=(vid?'<video controls src="'+url+'" style="width:100%;border-radius:6px"></video>':'<img src="'+url+'" style="width:100%;border-radius:6px">')+'<a download="'+name+'" href="'+url+'" style="color:#ffd54a">Download</a>';
+  gal.prepend(d);gb.style.display='block';return url;
+}
+function saveFile(blob,name){
+  const url=addItem(blob,name);
+  try{const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove()}catch(e){}
+  dbp.then(db=>{if(db)try{db.transaction('f','readwrite').objectStore('f').put({name,blob,t:Date.now()})}catch(e){}});
+}
+dbp.then(db=>{if(!db)return;const r=db.transaction('f').objectStore('f').getAll();
+  r.onsuccess=()=>r.result.sort((p,q)=>p.t-q.t).forEach(f=>addItem(f.blob,f.name))});
+let flash=0,mr=null,chunks=[];
+function photo(){
+  renderCam();flash=.18;
+  cv2.toBlob(b=>{if(b)saveFile(b,'monke-photo-'+Date.now()+'.jpg')},'image/jpeg',.92);
+}
+function toggleRec(){
+  if(!cst.rec){
+    const mime=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m));
+    if(!mime)return;
+    chunks=[];mr=new MediaRecorder(cv2.captureStream(30),{mimeType:mime,videoBitsPerSecond:5e6});
+    mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+    mr.onstop=()=>{const ty=mime.split(';')[0];saveFile(new Blob(chunks,{type:ty}),'monke-clip-'+Date.now()+'.'+(ty.includes('mp4')?'mp4':'webm'))};
+    mr.start(1000);cst.rec=true;
+  }else{mr.stop();cst.rec=false}
+}
+function press(id){
+  if(id==='photo')photo();else if(id==='rec')toggleRec();
+  else if(id==='mode')cst.mode=(cst.mode+1)%3;
+  else if(id==='flip')cst.mode=cst.mode===2?0:2;
+}
+
+/* ---- per-frame ---- */
+const rc2=new THREE.Raycaster();rc2.far=3.5;
+const aim=[false,false],aimLen=[1,1];let camAcc=0;
+camTick=function(dt){
+  const xr=renderer.xr.isPresenting;
+  cm.visible=xr;
+  if(!xr){hs.forEach(h=>{h.hold=null});placed=false;if(cst.rec)toggleRec();return}
+  rig.updateMatrixWorld(true);headPose();
+  if(!placed){placeCam();placed=true}
+  updateCam();
+  // right stick up/down = FOV while holding the camera
+  const g1=byHand[1]&&byHand[1].gp;
+  if(hs.some(h=>h.hold)&&g1&&g1.axes&&g1.axes.length>=4&&Math.abs(g1.axes[3])>.2)cst.fov+=g1.axes[3]*40*dt;
+  // trigger: photo (holding hand) / laser-press on camera buttons (free hand)
+  for(let i=0;i<2;i++){
+    const h=hs[i],gp=h.src&&h.src.gamepad,tr=!!(gp&&gp.buttons[0]&&gp.buttons[0].pressed),edge=tr&&!h.prevTrig;h.prevTrig=tr;
+    aim[i]=false;
+    if(menuOpen)continue;
+    if(h.hold){if(edge)photo();continue}
+    h.ctrl.updateMatrixWorld(true);A.setFromMatrixPosition(h.ctrl.matrixWorld);B.set(0,0,-1).transformDirection(h.ctrl.matrixWorld);rc2.set(A,B);
+    const hit=rc2.intersectObjects(hitObjs,false)[0];
+    if(hit){
+      aim[i]=true;aimLen[i]=hit.distance/rig.scale.x;
+      const u=hit.object.userData;
+      if(u&&u.id){
+        u.t=.12;
+        if(u.id==='fovm'){if(tr)cst.fov-=40*dt}
+        else if(u.id==='fovp'){if(tr)cst.fov+=40*dt}
+        else if(edge){press(u.id);buzz(h,.5,40)}
+      }
+    }
+  }
+  for(let i=0;i<2;i++){lasers[i].visible=menuOpen||aim[i];if(!menuOpen&&aim[i])lasers[i].scale.z=aimLen[i]}
+  cst.fov=Math.max(15,Math.min(120,cst.fov));
+  buttons.forEach(bt=>{if(bt.userData.t>0)bt.userData.t-=dt});
+  if(flash>0){flash-=dt;flashM.visible=true;flashM.material.opacity=Math.max(flash/.18,0);if(flash<=0)flashM.visible=false}
+  ui();
+  // camera screen at ~24fps, only when it's nearby or recording
+  camAcc+=dt;
+  if(camAcc>=1/24&&(cst.rec||cm.position.distanceTo(hp)<8)){camAcc=0;renderCam()}
+};
+}
+
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
   if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
   if(P.g.spin)P.g.spin.rotation.y+=dt*25;
-  furTick(t);stepRemotes(dt);netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);
+  furTick(t);stepRemotes(dt);netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);camTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2*SIZE).add(V(0,1.4*SIZE,0));cam.lookAt(P.pos)}
