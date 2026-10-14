@@ -887,7 +887,7 @@ function stepVR(dt){
   else{tpOff.set(0,0,0);tpYaw=vrYaw}
   rig.position.add(tpOff);
 }
-// ---------- VR menu: hold BOTH grips for ~1.5s (only counts while your hands are off the ground) ----------
+// ---------- VR menu: dedicated left-controller menu button ----------
 const MW=512,MH=900,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
@@ -900,7 +900,7 @@ const tuneDefs=[
   ['scale','Stick scale',0.001,0.001,0.1]
 ];
 const MBTN=['mic','hear','sfx','turn','mode',...tuneDefs.map(d=>'tune:'+d[0]),'copy','close'].map((id,i)=>({id,x:40,y:72+i*56,w:432,h:48}));
-let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,gripHold=0,mArm=false;const mPrevTrig=[false,false];
+let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
 function stickConfigText(){return 'stickTune: '+JSON.stringify({position:{x:+stickTune.x.toFixed(3),y:+stickTune.y.toFixed(3),z:+stickTune.z.toFixed(3)},rotation:{x:+stickTune.rx.toFixed(3),y:+stickTune.ry.toFixed(3),z:+stickTune.rz.toFixed(3)},scale:+stickTune.scale.toFixed(4)})}
 function applyStickTune(){
@@ -963,10 +963,11 @@ function menuClick(id,uvX=0.5){
 function vrMenuTick(dt){
   if(!renderer.xr.isPresenting){if(menuOpen)setMenu(false);return}
   const gp0=byHand[0]&&byHand[0].gp,gp1=byHand[1]&&byHand[1].gp;
-  let mb=false;if(gp0)for(let i=7;i<gp0.buttons.length;i++)if(gp0.buttons[i].pressed)mb=true; // real menu button if exposed (index 6 is the thumbrest, so it is skipped)
-  const both=!!(gp0&&gp1&&gp0.buttons[1]&&gp1.buttons[1]&&gp0.buttons[1].pressed&&gp1.buttons[1].pressed);
-  gripHold=(both&&!P.touch[0]&&!P.touch[1])?gripHold+dt:0;
-  const req=mb||gripHold>1.5;if(!mArm){if(!req)mArm=true;mPrevReq=req}else{if(req&&!mPrevReq)setMenu(!menuOpen);mPrevReq=req}
+  // Only the dedicated menu control on the LEFT controller may toggle this menu.
+  // Grip holds, face buttons, thumbsticks, and arbitrary extra buttons are ignored.
+  const menuButton=!!(gp0&&gp0.buttons[7]&&gp0.buttons[7].pressed);
+  const req=menuButton;
+  if(!mArm){if(!req)mArm=true;mPrevReq=req}else{if(req&&!mPrevReq)setMenu(!menuOpen);mPrevReq=req}
   if(!menuOpen)return;
   let hov=-1;
   for(let i=0;i<2;i++){
@@ -975,7 +976,10 @@ function vrMenuTick(dt){
     c.updateMatrixWorld(true);_mo.setFromMatrixPosition(c.matrixWorld);_md.set(0,0,-1).transformDirection(c.matrixWorld);_rc.set(_mo,_md);
     const h=_rc.intersectObject(menuMesh,false)[0];let len=2.5/rig.scale.x;
     if(h){
-      len=h.distance/rig.scale.x;const px=h.uv.x*MW,py=(1-h.uv.y)*MH;
+      len=h.distance/rig.scale.x;
+      // Convert the real ray-hit point into menu-local coordinates. UV x can be mirrored on a DoubleSide back-face hit.
+      const localHit=menuMesh.worldToLocal(h.point.clone());
+      const px=(localHit.x+0.5)*MW,py=MH/2-localHit.y*MW;
       const bi=MBTN.findIndex(b=>px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h);
       if(bi>=0){hov=bi;if(press){pulse(gp);menuClick(MBTN[bi].id,(px-MBTN[bi].x)/MBTN[bi].w);if(!menuOpen)return}}
     }
@@ -984,8 +988,8 @@ function vrMenuTick(dt){
   menuHover=hov;drawMenu();
 }
 renderer.xr.addEventListener('sessionend',()=>setMenu(false));
-renderer.xr.addEventListener('sessionstart',()=>{mArm=false;const ss=renderer.xr.getSession();if(ss)ss.addEventListener('visibilitychange',()=>{mArm=false;gripHold=0;setMenu(false)})});
-ctrls.forEach(c=>{c.addEventListener('connected',()=>{mArm=false;gripHold=0});c.addEventListener('disconnected',()=>{mArm=false;gripHold=0})});
+renderer.xr.addEventListener('sessionstart',()=>{mArm=false;mPrevReq=false;const ss=renderer.xr.getSession();if(ss)ss.addEventListener('visibilitychange',()=>{mArm=false;mPrevReq=false;setMenu(false)})});
+ctrls.forEach(c=>{c.addEventListener('connected',()=>{mArm=false;mPrevReq=false});c.addEventListener('disconnected',()=>{mArm=false;mPrevReq=false})});
 
 const clock=new THREE.Clock();let t=0;
 renderer.setAnimationLoop(()=>{
