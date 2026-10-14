@@ -3,7 +3,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Monke Tag - Fan Game</title>
 <style>
-html,body{margin:0;height:100%;overflow:hidden;background:#9fd3f5;font-family:system-ui,sans-serif}
+@font-face{font-family:'Utopium';src:url('./fonts/Utopium-Regular.otf') format('opentype');font-style:normal;font-weight:400;font-display:swap}
+html,body{margin:0;height:100%;overflow:hidden;background:#9fd3f5;font-family:'Utopium',system-ui,sans-serif}
 canvas{display:block}
 #hud{position:fixed;top:10px;left:10px;color:#fff;text-shadow:0 1px 4px #000;font-size:15px;pointer-events:none;line-height:1.5}
 #state{font-size:24px;font-weight:700}
@@ -33,6 +34,9 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {FBXLoader} from 'three/addons/loaders/FBXLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
+
+// Load Utopium before drawing canvas-based UI text.
+await document.fonts.load('16px Utopium');
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 
@@ -387,7 +391,7 @@ const setStat=t=>$('mpstat').textContent=t,myName=()=>($('mpname').value||'Monke
 const updCount=()=>{if(net)setStat(`Public lobby: ${remotes.size+1}/${MAX_PLAYERS} players online`)};
 function mkTag(txt){
   const c=document.createElement('canvas');c.width=256;c.height=64;const x=c.getContext('2d');
-  x.fillStyle='#0009';x.fillRect(0,8,256,48);x.fillStyle='#fff';x.font='bold 34px sans-serif';x.textAlign='center';x.fillText(txt,128,45);
+  x.fillStyle='#0009';x.fillRect(0,8,256,48);x.fillStyle='#fff';x.font='bold 34px Utopium, sans-serif';x.textAlign='center';x.fillText(txt,128,45);
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false}));sp.scale.set(.8,.2,1);sp.renderOrder=5;sp.position.set(0,1.05,0);return sp;
 }
 P.tag=mkTag(myName());P.g.group.add(P.tag);
@@ -704,7 +708,7 @@ function hudTick(){
   const tx=hudText(),tg=game.mode==='tag'&&game.phase==='play'&&game.tagged.has(myId());
   if(tx!==hudTxt){
     hudTxt=tx;$('state').textContent=tx;$('state').style.color=tg?'#ff6b6b':'#fff';
-    hudCx.clearRect(0,0,640,100);if(tx){hudCx.fillStyle='rgba(0,0,0,.65)';hudCx.fillRect(0,0,640,100);hudCx.fillStyle=tg?'#ff6b6b':'#fff';hudCx.font='bold 34px system-ui,sans-serif';hudCx.textAlign='center';hudCx.fillText(tx,320,62)}
+    hudCx.clearRect(0,0,640,100);if(tx){hudCx.fillStyle='rgba(0,0,0,.65)';hudCx.fillRect(0,0,640,100);hudCx.fillStyle=tg?'#ff6b6b':'#fff';hudCx.font='bold 34px Utopium, sans-serif';hudCx.textAlign='center';hudCx.fillText(tx,320,62)}
     hudTex.needsUpdate=true;
   }
   hudPlane.visible=renderer.xr.isPresenting&&!!tx;
@@ -910,7 +914,7 @@ function drawMenu(){
   if(key===menuDrawKey)return;menuDrawKey=key;
   const x=menuCx;x.clearRect(0,0,MW,MH);
   x.fillStyle='rgba(0,0,0,.88)';rr(0,0,MW,MH,28);x.fill();
-  x.fillStyle='#fff';x.font='bold 30px system-ui,sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,43);
+  x.fillStyle='#fff';x.font='bold 30px Utopium, sans-serif';x.textAlign='center';x.fillText('MENU',MW/2,43);
   MBTN.forEach((b,i)=>{
     let col='#555',txt='Close menu',fg='#fff';
     if(b.id==='mic'){col=micOn?'#3ecf6a':'#d9534f';fg=micOn?'#000':'#fff';txt='Mic: '+(micOn?(micOK===false?'ON (no mic)':'ON'):'OFF')}
@@ -920,7 +924,7 @@ function drawMenu(){
     else if(b.id==='mode'){col=isHost()?'#b45309':'#444';txt='Game mode: '+(game.mode==='tag'?'TAG':'CASUAL')+(isHost()?'':' (host only)')}
     x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
     if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
-    x.fillStyle=fg;x.font='bold 19px system-ui,sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+6);
+    x.fillStyle=fg;x.font='bold 19px Utopium, sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+6);
   });
   menuTex.needsUpdate=true;
 }
