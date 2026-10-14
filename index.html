@@ -928,6 +928,19 @@ function drawMenu(){
   });
   menuTex.needsUpdate=true;
 }
+const ctrls=[0,1].map(i=>renderer.xr.getController(i));
+const lasers=ctrls.map(c=>{const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(),V(0,0,-1)]),new THREE.LineBasicMaterial({color:0xffd54a,fog:false}));l.visible=false;c.add(l);return l});
+const _rc=new THREE.Raycaster(),_mo=V(),_md=V(),_mq=new THREE.Quaternion();
+function setMenu(on){
+  if(on===menuOpen)return;menuOpen=on;menuG.visible=on;lasers.forEach(l=>l.visible=on);
+  if(!on)return;
+  const xc=renderer.xr.getCamera();rig.localToWorld(_mo.copy(xc.position));_mq.copy(rig.quaternion).multiply(xc.quaternion);
+  _md.set(0,0,-1).applyQuaternion(_mq);_md.y=0;if(_md.lengthSq()<1e-4)_md.set(0,0,-1);_md.normalize();
+  menuG.position.copy(_mo).addScaledVector(_md,1);menuG.position.y=_mo.y-0.05;
+  menuG.lookAt(_mo.x,menuG.position.y,_mo.z);menuG.updateMatrixWorld(true);
+  menuHover=-1;menuDrawKey='';drawMenu();
+}
+const pulse=gp=>{try{const a=gp&&gp.hapticActuators&&gp.hapticActuators[0];if(a&&a.pulse)a.pulse(0.4,40)}catch(e){}};
 function menuClick(id){
   if(id==='mic')setMic(!micOn);
   else if(id==='hear')setHear(!hearOn);
