@@ -919,43 +919,84 @@ function stepVR(dt){
   rig.position.add(tpOff);
 }
 // ---------- VR menu: dedicated left-controller menu button ----------
-const MW=512,MH=560,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
+const MW=512,MH=600,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
 menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
 // Fixed stick transform: the tuning controls have been removed.
 const stickTune={x:-0.03,y:0.09,z:-0.04,rx:1.6,ry:1.9,rz:1.8,scale:0.01};
 // ---------- MOCAP: record the gorilla rig, export a GLB with Playermodel.glb baked in ----------
-// Menu > Mocap > Record / Stop / Export GLB / Clear take. Records every bone of the player model (local pos/rot/scale)
-// plus the gorilla's root transform, then exports a fresh copy of Playermodel.glb (skinned, textured) with the take as an animation.
+// Menu > Mocap > Record / Stop / Export GLB / Clear take, plus Include map / Include other players.
+// Records every bone of the player model (local pos/rot/scale) plus the gorilla's root transform. Export builds a fresh copy of
+// Playermodel.glb (skinned, textured) per recorded player and bakes the take on as animation. Your Secret Stick (client-side only,
+// never sent to other players) is added to your right hand in the file when you have it equipped.
 const MOCAP_FPS=60,MOCAP_MAX=36000,MOCAP_BINARY=true; // MOCAP_BINARY=false -> plain .gltf instead of .glb
-const mocap={rec:false,busy:false,bones:[],times:[],data:[],t0:0,next:0,msg:'',map:false};
-try{mocap.map=localStorage.getItem('monkeMocapMap')==='1'}catch(e){}
+const mocap={rec:false,busy:false,bones:[],times:[],data:[],rem:new Map(),t0:0,next:0,msg:'',map:false,players:false};
+try{mocap.map=localStorage.getItem('monkeMocapMap')==='1';mocap.players=localStorage.getItem('monkeMocapPlayers')==='1'}catch(e){}
 const mocapSay=m=>{mocap.msg=m};
 const mocapSecs=()=>mocap.times.length?mocap.times[mocap.times.length-1].toFixed(1):'0.0';
-// walk the live model but skip hats and the stick so the bone/mesh order always matches a clean copy
-function mocapWalk(o,fn){fn(o);for(const c of o.children){if(c===P.g.hatObj||c===handCosmetic)continue;mocapWalk(c,fn)}}
+// walk a gorilla's model but skip hats and the stick so bone/mesh order always matches a clean copy of Playermodel.glb
+function mocapWalk(o,fn,g=P.g){fn(o);for(const c of o.children){if(c===g.hatObj||(g===P.g&&c===handCosmetic))continue;mocapWalk(c,fn,g)}}
+function mocapBonesOf(g){const b=[];mocapWalk(g.model,o=>{if(o.isBone)b.push(o)},g);return b}
 function mocapStart(){
-  const bones=[];mocapWalk(P.g.model,o=>{if(o.isBone)bones.push(o)});
+  const bones=mocapBonesOf(P.g);
   if(!bones.length){mocapSay('No bones found on the model');return}
-  mocap.rec=true;mocap.bones=bones;mocap.times=[];mocap.data=[];mocap.t0=performance.now();mocap.next=mocap.t0;mocapSay('Recording...');
+  mocap.rec=true;mocap.bones=bones;mocap.times=[];mocap.data=[];mocap.rem=new Map();mocap.t0=performance.now();mocap.next=mocap.t0;mocapSay('Recording...');
 }
 function mocapStop(){mocap.rec=false;mocapSay(mocap.times.length?'Take saved: '+mocap.times.length+' frames':'Nothing recorded')}
 function mocapToggle(){if(mocap.busy)return;mocap.rec?mocapStop():mocapStart()}
-function mocapClear(){if(mocap.busy)return;mocap.rec=false;mocap.times=[];mocap.data=[];mocapSay('Take cleared')}
-function mocapTick(){
+function mocapClear(){if(mocap.busy)return;mocap.rec=false;mocap.times=[];mocap.data=[];mocap.rem=new Map();mocapSay('Take cleared')}
+function mocapSample(g,bones){
+  const a=new Float32Array((bones.length+1)*10);let k=0;
+  const put=o=>{a[k++]=o.position.x;a[k++]=o.position.y;a[k++]=o.position.z;a[k++]=o.quaternion.x;a[k++]=o.quaternion.y;a[k++]=o.quaternion.z;a[k++]=o.quaternion.w;a[k++]=o.scale.x;a[k++]=o.scale.y;a[k++]=o.scale.z};
+  put(g.group);bones.forEach(put);return a;
+}
+function mocapTick(){ // runs after stepPlayer/stepVR and stepRemotes, so every rig is already posed for this frame
   if(!mocap.rec)return;
   const now=performance.now();if(now<mocap.next)return;
   mocap.next=Math.max(mocap.next+1000/MOCAP_FPS,now-1000/MOCAP_FPS);
-  const a=new Float32Array((mocap.bones.length+1)*10);let k=0;
-  const put=o=>{a[k++]=o.position.x;a[k++]=o.position.y;a[k++]=o.position.z;a[k++]=o.quaternion.x;a[k++]=o.quaternion.y;a[k++]=o.quaternion.z;a[k++]=o.quaternion.w;a[k++]=o.scale.x;a[k++]=o.scale.y;a[k++]=o.scale.z};
-  put(P.g.group);mocap.bones.forEach(put);
-  mocap.times.push((now-mocap.t0)/1000);mocap.data.push(a);
+  const tt=(now-mocap.t0)/1000;
+  mocap.times.push(tt);mocap.data.push(mocapSample(P.g,mocap.bones));
+  if(mocap.players)remotes.forEach(r=>{
+    if(!r.g||!r.g.model)return;
+    let e=mocap.rem.get(r);
+    if(!e){const bones=mocapBonesOf(r.g);if(!bones.length)return;e={g:r.g,name:r.name||'Monke',bones,times:[],data:[]};mocap.rem.set(r,e)}
+    if(r.name)e.name=r.name;e.times.push(tt);e.data.push(mocapSample(r.g,e.bones));
+  });
   if(mocap.times.length>=MOCAP_MAX){mocapStop();mocapSay('Hit the length limit, take stopped')}
 }
 function mocapDownload(data,name,mime){
   const url=URL.createObjectURL(new Blob([data],{type:mime})),a=document.createElement('a');
   a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
+}
+// adds one gorilla (fresh copy of Playermodel.glb) + its animation tracks to the export
+function mocapActor(exScene,tracks,g,label,times,data,total,pad,stick){
+  const model=clone(playerGltf.scene),root=new THREE.Group();root.name=label;root.add(model);exScene.add(root);
+  const bones=[];model.traverse(o=>{if(o.isBone)bones.push(o)});
+  if(bones.length!==data[0].length/10-1)throw new Error('bone count mismatch for '+label);
+  // keep that gorilla's current fur color
+  const live=[];mocapWalk(g.model,o=>{if(o.isMesh)live.push(o)},g);let mi=0;
+  model.traverse(o=>{if(!o.isMesh)return;const l=live[mi++];
+    if(l&&!g.tg&&g.furMats.includes(l.material)){o.material=o.material.clone();o.material.color.copy(l.material.color)}});
+  // your Secret Stick: local only, goes on your right-hand bone
+  if(stick&&handCosmetic){const wi=mocap.bones.indexOf(P.g.rig.wrist[1]);
+    if(wi>=0){const st=handCosmetic.clone(true);st.name='Stick';bones[wi].add(st)}}
+  let T=Array.from(times),D=Array.from(data);
+  if(pad){ // a player who joined late / left early is shrunk to nothing outside the time they were recorded
+    const hide=f=>{const z=new Float32Array(f);z[7]=z[8]=z[9]=0;return z};
+    if(T[0]>0.002){const z=hide(D[0]);T.unshift(0,T[0]-0.001);D.unshift(z,z)}
+    const last=T[T.length-1];
+    if(total-last>0.002){const z=hide(D[D.length-1]);T.push(last+0.001,total);D.push(z,z)}
+  }
+  const n=T.length;
+  [root,...bones].forEach((o,j)=>{
+    const pv=new Float32Array(n*3),qv=new Float32Array(n*4),sv=new Float32Array(n*3);
+    for(let f=0;f<n;f++){const d=D[f],b=j*10;
+      pv.set([d[b],d[b+1],d[b+2]],f*3);qv.set([d[b+3],d[b+4],d[b+5],d[b+6]],f*4);sv.set([d[b+7],d[b+8],d[b+9]],f*3)}
+    tracks.push(new THREE.VectorKeyframeTrack(o.uuid+'.position',T,pv),
+                new THREE.QuaternionKeyframeTrack(o.uuid+'.quaternion',T,qv),
+                new THREE.VectorKeyframeTrack(o.uuid+'.scale',T,sv));
+  });
 }
 function mocapExport(){
   if(mocap.busy)return;
@@ -963,31 +1004,21 @@ function mocapExport(){
   const n=mocap.times.length;if(n<2){mocapSay('Record something first');return}
   mocap.busy=true;mocapSay('Building file...');
   setTimeout(()=>{try{
-    // fresh copy of the character from the repo (Playermodel.glb), same hierarchy as the live one
-    const model=clone(playerGltf.scene),root=new THREE.Group();root.name='Monke';root.add(model);
-    const exScene=new THREE.Scene();exScene.add(root);
-    if(mocap.map){const m=mapGltf.scene.clone(true);m.name='Map';exScene.add(m)} // same world transform as the live map, so the take lines up with it
-    const bones=[];model.traverse(o=>{if(o.isBone)bones.push(o)});
-    if(bones.length!==mocap.bones.length)throw new Error('bone count mismatch '+bones.length+' vs '+mocap.bones.length);
-    // keep the current fur color
-    const live=[];mocapWalk(P.g.model,o=>{if(o.isMesh)live.push(o)});let mi=0;
-    model.traverse(o=>{if(!o.isMesh)return;const l=live[mi++];
-      if(l&&!P.g.tg&&P.g.furMats.includes(l.material)){o.material=o.material.clone();o.material.color.copy(l.material.color)}});
-    const t0=mocap.times[0],times=mocap.times.map(t=>t-t0),objs=[root,...bones],tracks=[];
-    objs.forEach((o,j)=>{
-      const pv=new Float32Array(n*3),qv=new Float32Array(n*4),sv=new Float32Array(n*3);
-      for(let f=0;f<n;f++){const d=mocap.data[f],b=j*10;
-        pv.set([d[b],d[b+1],d[b+2]],f*3);qv.set([d[b+3],d[b+4],d[b+5],d[b+6]],f*4);sv.set([d[b+7],d[b+8],d[b+9]],f*3)}
-      tracks.push(new THREE.VectorKeyframeTrack(o.uuid+'.position',times,pv),
-                  new THREE.QuaternionKeyframeTrack(o.uuid+'.quaternion',times,qv),
-                  new THREE.VectorKeyframeTrack(o.uuid+'.scale',times,sv));
+    const exScene=new THREE.Scene(),tracks=[];
+    const t0=mocap.times[0],times=mocap.times.map(t=>t-t0),total=times[n-1];
+    mocapActor(exScene,tracks,P.g,'Monke',times,mocap.data,total,false,true);
+    let others=0;
+    if(mocap.players)mocap.rem.forEach(e=>{
+      if(e.times.length<2)return;
+      mocapActor(exScene,tracks,e.g,'Player_'+String(e.name||'Monke').replace(/[^\w-]/g,'_'),e.times.map(t=>Math.max(0,t-t0)),e.data,total,true,false);others++;
     });
+    if(mocap.map){const m=mapGltf.scene.clone(true);m.name='Map';exScene.add(m)} // same world transform as the live map, so the take lines up with it
     const clip=new THREE.AnimationClip('Mocap',-1,tracks);
     new GLTFExporter().parse(exScene,res=>{
-      const stamp=Date.now()+(mocap.map?'-map':'');
+      const stamp=Date.now()+(mocap.map?'-map':'')+(others?'-players':'');
       if(MOCAP_BINARY)mocapDownload(res,'monke-mocap-'+stamp+'.glb','model/gltf-binary');
       else mocapDownload(JSON.stringify(res),'monke-mocap-'+stamp+'.gltf','model/gltf+json');
-      mocap.busy=false;mocapSay('Exported '+n+' frames');
+      mocap.busy=false;mocapSay('Exported '+n+' frames'+(others?' + '+others+' player'+(others>1?'s':''):''));
     },err=>{console.error(err);mocap.busy=false;mocapSay('Export failed (see console)')},
     {binary:MOCAP_BINARY,animations:[clip],trs:true});
   }catch(e){console.error(e);mocap.busy=false;mocapSay('Export failed: '+e.message)}},30);
@@ -1000,7 +1031,7 @@ hatDefs.forEach((h,i)=>COS_BTNS.push({id:'hat:'+i,x:30+(i%5)*92,y:84+Math.floor(
 COLS.forEach((c,i)=>COS_BTNS.push({id:'col:'+i,x:52+i*52,y:298,w:44,h:44}));
 FURS.forEach((v,i)=>COS_BTNS.push({id:'fur:'+i,x:25+i*36,y:378,w:30,h:30}));
 COS_BTNS.push({id:'back',x:40,y:424,w:432,h:44});
-const MOCAP_BTNS=[{id:'mc_rec',x:40,y:84,w:432,h:56},{id:'mc_exp',x:40,y:152,w:432,h:56},{id:'mc_clr',x:40,y:220,w:432,h:56},{id:'mc_map',x:40,y:288,w:432,h:56},{id:'back',x:40,y:364,w:432,h:44}];
+const MOCAP_BTNS=[{id:'mc_rec',x:40,y:84,w:432,h:56},{id:'mc_exp',x:40,y:148,w:432,h:56},{id:'mc_clr',x:40,y:212,w:432,h:56},{id:'mc_map',x:40,y:276,w:432,h:56},{id:'mc_pl',x:40,y:340,w:432,h:56},{id:'back',x:40,y:408,w:432,h:44}];
 let menuPage='main';const menuBtns=()=>menuPage==='cos'?COS_BTNS:menuPage==='mocap'?MOCAP_BTNS:MAIN_BTNS;
 let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x+w,y+h,x,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
@@ -1034,7 +1065,7 @@ function hatThumb(hi,ci){
   return c;
 }
 function drawMenu(){
-  const key=menuPage+'|'+menuHover+'|'+cos.hat+'|'+cos.col+'|'+cos.fur+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost()+'|'+mocap.rec+'|'+(mocap.times.length>>4)+'|'+mocap.busy+'|'+mocap.msg+'|'+mocap.map;
+  const key=menuPage+'|'+menuHover+'|'+cos.hat+'|'+cos.col+'|'+cos.fur+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost()+'|'+mocap.rec+'|'+(mocap.times.length>>4)+'|'+mocap.busy+'|'+mocap.msg+'|'+mocap.map+'|'+mocap.players;
   if(key===menuDrawKey)return;menuDrawKey=key;
   const x=menuCx;x.clearRect(0,0,MW,MH);
   x.fillStyle='rgba(0,0,0,.88)';rr(0,0,MW,MH,28);x.fill();
@@ -1075,14 +1106,15 @@ function drawMenu(){
       else if(b.id==='mc_exp'){col='#8b5cf6';txt='Export GLB'+(n?'  ('+n+' frames)':'');dim=n<2||mocap.busy}
       else if(b.id==='mc_clr'){col='#0f9d8a';txt='Clear take';dim=!n&&!mocap.rec}
       else if(b.id==='mc_map'){col=mocap.map?'#3ecf6a':'#666';fg=mocap.map?'#000':'#fff';txt='Include map: '+(mocap.map?'ON':'OFF')}
+      else if(b.id==='mc_pl'){col=mocap.players?'#3ecf6a':'#666';fg=mocap.players?'#000':'#fff';txt='Include other players: '+(mocap.players?'ON':'OFF')}
       x.globalAlpha=dim?0.4:1;x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
       if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
       x.fillStyle=fg;x.font='bold 21px Utopium, sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+7);x.globalAlpha=1;
     });
-    x.fillStyle='#ffd54a';x.font='bold 18px Utopium, sans-serif';x.fillText(mocap.msg||'',MW/2,444);
+    x.fillStyle='#ffd54a';x.font='bold 18px Utopium, sans-serif';x.fillText(mocap.msg||'',MW/2,490);
     x.fillStyle='#aaa';x.font='15px Utopium, sans-serif';
-    x.fillText('Record closes the menu. Open it again to stop.',MW/2,484);
-    x.fillText('Export saves your gorilla + the take as a .glb',MW/2,508);
+    x.fillText('Record closes the menu. Open it again to stop.',MW/2,534);
+    x.fillText('Export saves your gorilla (and stick) + the take as a .glb',MW/2,558);
     menuTex.needsUpdate=true;return;
   }
   MAIN_BTNS.forEach((b,i)=>{
@@ -1127,6 +1159,7 @@ function menuClick(id){
   else if(id==='mc_exp')mocapExport();
   else if(id==='mc_clr')mocapClear();
   else if(id==='mc_map'){mocap.map=!mocap.map;try{localStorage.setItem('monkeMocapMap',mocap.map?'1':'0')}catch(e){}}
+  else if(id==='mc_pl'){mocap.players=!mocap.players;try{localStorage.setItem('monkeMocapPlayers',mocap.players?'1':'0')}catch(e){}}
   else if(id==='back'){menuPage='main';menuHover=-1;menuDrawKey=''}
   else if(id.startsWith('hat:')){cos.hat=+id.slice(4);wearHat()}
   else if(id.startsWith('col:')){cos.col=+id.slice(4);wearHat()}
@@ -1357,7 +1390,7 @@ renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
   if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
   if(P.g.spin)P.g.spin.rotation.y+=dt*25;
-  mocapTick();furTick(t);stepRemotes(dt);netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);camTick(dt);
+  furTick(t);stepRemotes(dt);mocapTick();netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);camTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2*SIZE).add(V(0,1.4*SIZE,0));cam.lookAt(P.pos)}
