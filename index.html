@@ -1023,7 +1023,7 @@ function mocapActor(exScene,tracks,g,label,times,data,total,pad,stick){
     if(l&&!g.tg&&g.furMats.includes(l.material)){o.material=o.material.clone();o.material.color.copy(l.material.color)}});
   // Secret Stick (yours or another player's): goes on that gorilla's right-hand bone
   const stSrc=g===P.g?handCosmetic:g.stickObj;
-  if(stick&&stSrc){const wi=mocapBonesOf(g).indexOf(g.rig.wrist[1]);
+  if(stick&&stSrc&&!mocapSkipStick){const wi=mocapBonesOf(g).indexOf(g.rig.wrist[1]);
     if(wi>=0){const st=stSrc.clone(true);st.name='Stick';bones[wi].add(st)}}
   let T=Array.from(times),D=Array.from(data);
   if(pad){ // a player who joined late / left early is shrunk to nothing outside the time they were recorded
@@ -1042,12 +1042,15 @@ function mocapActor(exScene,tracks,g,label,times,data,total,pad,stick){
                 new THREE.VectorKeyframeTrack(o.uuid+'.scale',T,sv));
   });
 }
+let mocapSkipStick=false;
 function mocapExport(){
   if(mocap.busy)return;
   if(mocap.rec)mocapStop();
   const n=mocap.times.length;if(n<2){mocapSay('Record something first');return}
   mocap.busy=true;mocapSay('Building file...');
-  setTimeout(()=>{try{
+  // level 0 = everything, 1 = without sticks, 2 = without sticks and map (so a bad piece can't block the whole export)
+  const run=lvl=>setTimeout(()=>{try{
+    mocapSkipStick=lvl>=1;const useMap=mocap.map&&lvl<2;
     const exScene=new THREE.Scene(),tracks=[];
     const t0=mocap.times[0],times=mocap.times.map(t=>t-t0),total=times[n-1];
     mocapActor(exScene,tracks,P.g,'Monke',times,mocap.data,total,false,true);
@@ -1056,16 +1059,17 @@ function mocapExport(){
       if(e.times.length<2)return;
       mocapActor(exScene,tracks,e.g,'Player_'+String(e.name||'Monke').replace(/[^\w-]/g,'_'),e.times.map(t=>Math.max(0,t-t0)),e.data,total,true,!!e.g.stickObj);others++;
     });
-    if(mocap.map){const m=mapGltf.scene.clone(true);m.name='Map';exScene.add(m)} // same world transform as the live map, so the take lines up with it
+    if(useMap){const m=mapGltf.scene.clone(true);m.name='Map';exScene.add(m)} // same world transform as the live map, so the take lines up with it
     const clip=new THREE.AnimationClip('Mocap',-1,tracks);
     new GLTFExporter().parse(exScene,res=>{
-      const stamp=Date.now()+(mocap.map?'-map':'')+(others?'-players':'');
+      const stamp=Date.now()+(useMap?'-map':'')+(others?'-players':'');
       if(MOCAP_BINARY)mocapDownload(res,'monke-mocap-'+stamp+'.glb','model/gltf-binary');
       else mocapDownload(JSON.stringify(res),'monke-mocap-'+stamp+'.gltf','model/gltf+json');
-      mocap.busy=false;mocapSay('Exported '+n+' frames'+(others?' + '+others+' player'+(others>1?'s':''):''));
-    },err=>{console.error(err);mocap.busy=false;mocapSay('Export failed (see console)')},
+      mocap.busy=false;mocapSay('Exported '+n+' frames'+(others?' + '+others+' player'+(others>1?'s':''):'')+(lvl==1?' (stick skipped)':lvl>=2?' (stick + map skipped)':''));
+    },err=>{console.error(err);if(lvl<2){run(lvl+1);return}mocap.busy=false;mocapSay('Export failed: '+String((err&&err.message)||err).slice(0,40))},
     {binary:MOCAP_BINARY,animations:[clip],trs:true});
-  }catch(e){console.error(e);mocap.busy=false;mocapSay('Export failed: '+e.message)}},30);
+  }catch(e){console.error(e);if(lvl<2){run(lvl+1);return}mocap.busy=false;mocapSay('Export failed: '+String(e.message).slice(0,40))}},30);
+  run(0);
 }
 const menuIds=['mic','hear','sfx','turn','mode','cam','cos','mocap','close'];
 const MAIN_BTNS=menuIds.map((id,i)=>({id,x:40,y:64+i*52,w:432,h:44}));
