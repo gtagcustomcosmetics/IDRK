@@ -34,6 +34,7 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {FBXLoader} from 'three/addons/loaders/FBXLoader.js';
 import {clone} from 'three/addons/utils/SkeletonUtils.js';
+import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
 
 // Load Utopium before drawing canvas-based UI text.
 try { await document.fonts.load('16px Utopium'); } catch (fontError) { console.warn('Utopium font failed to load; using fallback font.', fontError); }
@@ -262,7 +263,7 @@ function makeGorilla(){
   for(let k=0;k<2;k++){const s=rig.upper[k].getWorldPosition(V()),w=rig.wrist[k].getWorldPosition(V());rig.sh[k]=s;rig.len[k]=s.distanceTo(w);const l=rig.lower[k].getWorldPosition(V());rig.lu[k]=s.distanceTo(l);rig.ll[k]=l.distanceTo(w)}
   let fm=meshes.filter(o=>FUR_MATCH.test(o.material.name));
   if(!fm.length)fm=[meshes.reduce((a,b)=>b.geometry.attributes.position.count>a.geometry.attributes.position.count?b:a)];
-  return {group,rig,furMats:fm.map(o=>o.material),origMaps:fm.map(o=>o.material.map),fur:0xffffff,tg:false};
+  return {group,model,rig,furMats:fm.map(o=>o.material),origMaps:fm.map(o=>o.material.map),fur:0xffffff,tg:false};
 }
 const _S=V(),_W=V(),_C=V(),_D=V(),_q=new THREE.Quaternion(),_Qw=new THREE.Quaternion(),_Pq=new THREE.Quaternion();
 // arm direction in gorilla-local space: a = swing forward(+)/back(-), b = swing outward
@@ -918,13 +919,80 @@ function stepVR(dt){
   rig.position.add(tpOff);
 }
 // ---------- VR menu: dedicated left-controller menu button ----------
-const MW=512,MH=500,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
+const MW=512,MH=560,menuCv=document.createElement('canvas');menuCv.width=MW;menuCv.height=MH;
 const menuCx=menuCv.getContext('2d'),menuTex=new THREE.CanvasTexture(menuCv);
 const menuG=new THREE.Group(),menuMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,MH/MW),new THREE.MeshBasicMaterial({map:menuTex,transparent:true,fog:false,side:THREE.DoubleSide}));
 menuG.add(menuMesh);menuG.visible=false;scene.add(menuG);
 // Fixed stick transform: the tuning controls have been removed.
 const stickTune={x:-0.03,y:0.09,z:-0.04,rx:1.6,ry:1.9,rz:1.8,scale:0.01};
-const menuIds=['mic','hear','sfx','turn','mode','cam','cos','close'];
+// ---------- MOCAP: record the gorilla rig, export a GLB with Playermodel.glb baked in ----------
+// Menu > Mocap > Record / Stop / Export GLB / Clear take. Records every bone of the player model (local pos/rot/scale)
+// plus the gorilla's root transform, then exports a fresh copy of Playermodel.glb (skinned, textured) with the take as an animation.
+const MOCAP_FPS=60,MOCAP_MAX=36000,MOCAP_BINARY=true; // MOCAP_BINARY=false -> plain .gltf instead of .glb
+const mocap={rec:false,busy:false,bones:[],times:[],data:[],t0:0,next:0,msg:'',map:false};
+try{mocap.map=localStorage.getItem('monkeMocapMap')==='1'}catch(e){}
+const mocapSay=m=>{mocap.msg=m};
+const mocapSecs=()=>mocap.times.length?mocap.times[mocap.times.length-1].toFixed(1):'0.0';
+// walk the live model but skip hats and the stick so the bone/mesh order always matches a clean copy
+function mocapWalk(o,fn){fn(o);for(const c of o.children){if(c===P.g.hatObj||c===handCosmetic)continue;mocapWalk(c,fn)}}
+function mocapStart(){
+  const bones=[];mocapWalk(P.g.model,o=>{if(o.isBone)bones.push(o)});
+  if(!bones.length){mocapSay('No bones found on the model');return}
+  mocap.rec=true;mocap.bones=bones;mocap.times=[];mocap.data=[];mocap.t0=performance.now();mocap.next=mocap.t0;mocapSay('Recording...');
+}
+function mocapStop(){mocap.rec=false;mocapSay(mocap.times.length?'Take saved: '+mocap.times.length+' frames':'Nothing recorded')}
+function mocapToggle(){if(mocap.busy)return;mocap.rec?mocapStop():mocapStart()}
+function mocapClear(){if(mocap.busy)return;mocap.rec=false;mocap.times=[];mocap.data=[];mocapSay('Take cleared')}
+function mocapTick(){
+  if(!mocap.rec)return;
+  const now=performance.now();if(now<mocap.next)return;
+  mocap.next=Math.max(mocap.next+1000/MOCAP_FPS,now-1000/MOCAP_FPS);
+  const a=new Float32Array((mocap.bones.length+1)*10);let k=0;
+  const put=o=>{a[k++]=o.position.x;a[k++]=o.position.y;a[k++]=o.position.z;a[k++]=o.quaternion.x;a[k++]=o.quaternion.y;a[k++]=o.quaternion.z;a[k++]=o.quaternion.w;a[k++]=o.scale.x;a[k++]=o.scale.y;a[k++]=o.scale.z};
+  put(P.g.group);mocap.bones.forEach(put);
+  mocap.times.push((now-mocap.t0)/1000);mocap.data.push(a);
+  if(mocap.times.length>=MOCAP_MAX){mocapStop();mocapSay('Hit the length limit, take stopped')}
+}
+function mocapDownload(data,name,mime){
+  const url=URL.createObjectURL(new Blob([data],{type:mime})),a=document.createElement('a');
+  a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
+}
+function mocapExport(){
+  if(mocap.busy)return;
+  if(mocap.rec)mocapStop();
+  const n=mocap.times.length;if(n<2){mocapSay('Record something first');return}
+  mocap.busy=true;mocapSay('Building file...');
+  setTimeout(()=>{try{
+    // fresh copy of the character from the repo (Playermodel.glb), same hierarchy as the live one
+    const model=clone(playerGltf.scene),root=new THREE.Group();root.name='Monke';root.add(model);
+    const exScene=new THREE.Scene();exScene.add(root);
+    if(mocap.map){const m=mapGltf.scene.clone(true);m.name='Map';exScene.add(m)} // same world transform as the live map, so the take lines up with it
+    const bones=[];model.traverse(o=>{if(o.isBone)bones.push(o)});
+    if(bones.length!==mocap.bones.length)throw new Error('bone count mismatch '+bones.length+' vs '+mocap.bones.length);
+    // keep the current fur color
+    const live=[];mocapWalk(P.g.model,o=>{if(o.isMesh)live.push(o)});let mi=0;
+    model.traverse(o=>{if(!o.isMesh)return;const l=live[mi++];
+      if(l&&!P.g.tg&&P.g.furMats.includes(l.material)){o.material=o.material.clone();o.material.color.copy(l.material.color)}});
+    const t0=mocap.times[0],times=mocap.times.map(t=>t-t0),objs=[root,...bones],tracks=[];
+    objs.forEach((o,j)=>{
+      const pv=new Float32Array(n*3),qv=new Float32Array(n*4),sv=new Float32Array(n*3);
+      for(let f=0;f<n;f++){const d=mocap.data[f],b=j*10;
+        pv.set([d[b],d[b+1],d[b+2]],f*3);qv.set([d[b+3],d[b+4],d[b+5],d[b+6]],f*4);sv.set([d[b+7],d[b+8],d[b+9]],f*3)}
+      tracks.push(new THREE.VectorKeyframeTrack(o.uuid+'.position',times,pv),
+                  new THREE.QuaternionKeyframeTrack(o.uuid+'.quaternion',times,qv),
+                  new THREE.VectorKeyframeTrack(o.uuid+'.scale',times,sv));
+    });
+    const clip=new THREE.AnimationClip('Mocap',-1,tracks);
+    new GLTFExporter().parse(exScene,res=>{
+      const stamp=Date.now()+(mocap.map?'-map':'');
+      if(MOCAP_BINARY)mocapDownload(res,'monke-mocap-'+stamp+'.glb','model/gltf-binary');
+      else mocapDownload(JSON.stringify(res),'monke-mocap-'+stamp+'.gltf','model/gltf+json');
+      mocap.busy=false;mocapSay('Exported '+n+' frames');
+    },err=>{console.error(err);mocap.busy=false;mocapSay('Export failed (see console)')},
+    {binary:MOCAP_BINARY,animations:[clip],trs:true});
+  }catch(e){console.error(e);mocap.busy=false;mocapSay('Export failed: '+e.message)}},30);
+}
+const menuIds=['mic','hear','sfx','turn','mode','cam','cos','mocap','close'];
 const MAIN_BTNS=menuIds.map((id,i)=>({id,x:40,y:64+i*52,w:432,h:44}));
 // cosmetics page: hat thumbnails (5 per row), hat colors, fur colors, back button
 const COS_BTNS=[];
@@ -932,7 +1000,8 @@ hatDefs.forEach((h,i)=>COS_BTNS.push({id:'hat:'+i,x:30+(i%5)*92,y:84+Math.floor(
 COLS.forEach((c,i)=>COS_BTNS.push({id:'col:'+i,x:52+i*52,y:298,w:44,h:44}));
 FURS.forEach((v,i)=>COS_BTNS.push({id:'fur:'+i,x:25+i*36,y:378,w:30,h:30}));
 COS_BTNS.push({id:'back',x:40,y:424,w:432,h:44});
-let menuPage='main';const menuBtns=()=>menuPage==='cos'?COS_BTNS:MAIN_BTNS;
+const MOCAP_BTNS=[{id:'mc_rec',x:40,y:84,w:432,h:56},{id:'mc_exp',x:40,y:152,w:432,h:56},{id:'mc_clr',x:40,y:220,w:432,h:56},{id:'mc_map',x:40,y:288,w:432,h:56},{id:'back',x:40,y:364,w:432,h:44}];
+let menuPage='main';const menuBtns=()=>menuPage==='cos'?COS_BTNS:menuPage==='mocap'?MOCAP_BTNS:MAIN_BTNS;
 let menuHover=-1,menuDrawKey='',menuOpen=false,mPrevReq=false,mArm=false;const mPrevTrig=[false,false];
 function rr(x,y,w,h,r){menuCx.beginPath();menuCx.moveTo(x+r,y);menuCx.arcTo(x+w,y,x+w,y+h,r);menuCx.arcTo(x+w,y+h,x,y+h,r);menuCx.arcTo(x,y+h,x,y,r);menuCx.arcTo(x,y,x+w,y,r);menuCx.closePath()}
 function applyStickTune(){
@@ -965,11 +1034,11 @@ function hatThumb(hi,ci){
   return c;
 }
 function drawMenu(){
-  const key=menuPage+'|'+menuHover+'|'+cos.hat+'|'+cos.col+'|'+cos.fur+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost();
+  const key=menuPage+'|'+menuHover+'|'+cos.hat+'|'+cos.col+'|'+cos.fur+'|'+micOn+'|'+micOK+'|'+hearOn+'|'+sfxOn+'|'+turnMode+'|'+game.mode+'|'+isHost()+'|'+mocap.rec+'|'+(mocap.times.length>>4)+'|'+mocap.busy+'|'+mocap.msg+'|'+mocap.map;
   if(key===menuDrawKey)return;menuDrawKey=key;
   const x=menuCx;x.clearRect(0,0,MW,MH);
   x.fillStyle='rgba(0,0,0,.88)';rr(0,0,MW,MH,28);x.fill();
-  x.fillStyle='#fff';x.font='bold 30px Utopium, sans-serif';x.textAlign='center';x.fillText(menuPage==='cos'?'COSMETICS':'MENU',MW/2,43);
+  x.fillStyle='#fff';x.font='bold 30px Utopium, sans-serif';x.textAlign='center';x.fillText(menuPage==='cos'?'COSMETICS':menuPage==='mocap'?'MOCAP':'MENU',MW/2,43);
   if(menuPage==='cos'){
     const hb=menuBtns()[menuHover],hovHat=hb&&hb.id.startsWith('hat:')?+hb.id.slice(4):cos.hat;
     x.fillStyle='#ccc';x.font='bold 18px Utopium, sans-serif';x.textAlign='left';
@@ -998,6 +1067,24 @@ function drawMenu(){
     });
     menuTex.needsUpdate=true;return;
   }
+  if(menuPage==='mocap'){
+    x.textAlign='center';
+    menuBtns().forEach((b,i)=>{
+      let col='#555',txt='< Back',fg='#fff',dim=false;const n=mocap.times.length;
+      if(b.id==='mc_rec'){col=mocap.rec?'#d9534f':'#c0392b';txt=mocap.rec?'Stop  ('+mocapSecs()+'s)':'Record'}
+      else if(b.id==='mc_exp'){col='#8b5cf6';txt='Export GLB'+(n?'  ('+n+' frames)':'');dim=n<2||mocap.busy}
+      else if(b.id==='mc_clr'){col='#0f9d8a';txt='Clear take';dim=!n&&!mocap.rec}
+      else if(b.id==='mc_map'){col=mocap.map?'#3ecf6a':'#666';fg=mocap.map?'#000':'#fff';txt='Include map: '+(mocap.map?'ON':'OFF')}
+      x.globalAlpha=dim?0.4:1;x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
+      if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
+      x.fillStyle=fg;x.font='bold 21px Utopium, sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+7);x.globalAlpha=1;
+    });
+    x.fillStyle='#ffd54a';x.font='bold 18px Utopium, sans-serif';x.fillText(mocap.msg||'',MW/2,444);
+    x.fillStyle='#aaa';x.font='15px Utopium, sans-serif';
+    x.fillText('Record closes the menu. Open it again to stop.',MW/2,484);
+    x.fillText('Export saves your gorilla + the take as a .glb',MW/2,508);
+    menuTex.needsUpdate=true;return;
+  }
   MAIN_BTNS.forEach((b,i)=>{
     let col='#555',txt='Close menu',fg='#fff';
     if(b.id==='mic'){col=micOn?'#3ecf6a':'#d9534f';fg=micOn?'#000':'#fff';txt='Mic: '+(micOn?(micOK===false?'ON (no mic)':'ON'):'OFF')}
@@ -1007,6 +1094,7 @@ function drawMenu(){
     else if(b.id==='mode'){col=isHost()?'#b45309':'#444';txt='Game mode: '+(game.mode==='tag'?'TAG':'CASUAL')+(isHost()?'':' (host only)')}
     else if(b.id==='cam'){col='#8b5cf6';txt='Bring camera to me'}
     else if(b.id==='cos'){col='#db2777';txt='Cosmetics  >'}
+    else if(b.id==='mocap'){col=mocap.rec?'#d9534f':'#0ea5a4';txt=mocap.rec?'Mocap: REC '+mocapSecs()+'s  >':'Mocap  >'}
     x.fillStyle=col;rr(b.x,b.y,b.w,b.h,12);x.fill();
     if(i===menuHover){x.strokeStyle='#fff';x.lineWidth=4;rr(b.x,b.y,b.w,b.h,12);x.stroke()}
     x.fillStyle=fg;x.font='bold 19px Utopium, sans-serif';x.fillText(txt,b.x+b.w/2,b.y+b.h/2+6);
@@ -1023,7 +1111,7 @@ function setMenu(on){
   _md.set(0,0,-1).applyQuaternion(_mq);_md.y=0;if(_md.lengthSq()<1e-4)_md.set(0,0,-1);_md.normalize();
   menuG.position.copy(_mo).addScaledVector(_md,1);menuG.position.y=_mo.y-0.05;
   menuG.lookAt(_mo.x,menuG.position.y,_mo.z);menuG.updateMatrixWorld(true);
-  menuPage='main';menuHover=-1;menuDrawKey='';drawMenu();
+  menuPage=mocap.rec?'mocap':'main';menuHover=-1;menuDrawKey='';drawMenu();
 }
 const pulse=gp=>{try{const a=gp&&gp.hapticActuators&&gp.hapticActuators[0];if(a&&a.pulse)a.pulse(0.4,40)}catch(e){}};
 function menuClick(id){
@@ -1034,6 +1122,11 @@ function menuClick(id){
   else if(id==='mode'){if(isHost())hostSetMode(game.mode==='tag'?'free':'tag')}
   else if(id==='cam'){camBring();setMenu(false)}
   else if(id==='cos'){menuPage='cos';menuHover=-1;menuDrawKey=''}
+  else if(id==='mocap'){menuPage='mocap';menuHover=-1;menuDrawKey=''}
+  else if(id==='mc_rec'){mocapToggle();if(mocap.rec)setMenu(false)}
+  else if(id==='mc_exp')mocapExport();
+  else if(id==='mc_clr')mocapClear();
+  else if(id==='mc_map'){mocap.map=!mocap.map;try{localStorage.setItem('monkeMocapMap',mocap.map?'1':'0')}catch(e){}}
   else if(id==='back'){menuPage='main';menuHover=-1;menuDrawKey=''}
   else if(id.startsWith('hat:')){cos.hat=+id.slice(4);wearHat()}
   else if(id.startsWith('col:')){cos.col=+id.slice(4);wearHat()}
@@ -1264,7 +1357,7 @@ renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(),1/30);t+=dt;
   if(renderer.xr.isPresenting)stepVR(dt);else stepPlayer(dt);
   if(P.g.spin)P.g.spin.rotation.y+=dt*25;
-  furTick(t);stepRemotes(dt);netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);camTick(dt);
+  mocapTick();furTick(t);stepRemotes(dt);netTick(dt);gameTick(dt);voiceTick();vrMenuTick(dt);camTick(dt);
   const f=V(-Math.sin(P.yaw),0,-Math.cos(P.yaw));
   if(renderer.xr.isPresenting){}
   else if(P.third){cam.position.copy(P.pos).addScaledVector(f,-3.2*SIZE).add(V(0,1.4*SIZE,0));cam.lookAt(P.pos)}
